@@ -3,6 +3,7 @@ import { Cairo } from "next/font/google";
 import "./globals.css";
 import { Navbar } from "@/components/layout/Navbar";
 import { AnalyticsHeartbeat } from "@/components/analytics/Heartbeat";
+import { AuthProvider } from "@/lib/auth-context";
 
 const cairo = Cairo({
   subsets: ["arabic", "latin"],
@@ -11,9 +12,9 @@ const cairo = Cairo({
 });
 
 export const metadata: Metadata = {
-  title: "Peak Motion — إدارة الحالات والبرامج التأهيلية",
+  title: "Revive — إدارة الحالات والبرامج التأهيلية",
   description:
-    "منصة إدارة حالات العلاج الطبيعي والإصابات الرياضية والبرامج التأهيلية",
+    "منصة Revive لإدارة حالات العلاج الطبيعي والإصابات الرياضية والبرامج التأهيلية وتحليل الحركة",
   icons: { icon: "/favicon.ico" },
 };
 
@@ -25,9 +26,11 @@ export default function RootLayout({
   return (
     <html lang="ar" dir="rtl" className={cairo.variable}>
       <body className="min-h-screen bg-slate-50">
-        <Navbar />
-        <AnalyticsHeartbeat />
-        <main className="pt-16">{children}</main>
+        <AuthProvider>
+          <Navbar />
+          <AnalyticsHeartbeat />
+          <main className="pt-16">{children}</main>
+        </AuthProvider>
       </body>
     </html>
   );

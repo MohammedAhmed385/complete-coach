@@ -286,7 +286,7 @@ export default function HomeDashboardPage() {
               </div>
 
               <h1 className="text-2xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-white leading-tight">
-                Peak Motion —{" "}
+                Revive —{" "}
                 <span className="text-transparent bg-clip-text bg-gradient-to-l from-emerald-400 to-teal-200">
                   إدارة الحالات والبرامج التأهيلية
                 </span>
@@ -568,7 +568,7 @@ export default function HomeDashboardPage() {
               </div>
               <div>
                 <h3 className="text-lg font-bold text-navy-950">
-                  منهجية التأهيل السريري في Peak Motion
+                  منهجية التأهيل السريري في Revive
                 </h3>
                 <p className="text-xs text-slate-500">
                   Clinical Rehabilitation Framework & Evidence-Based Practice
