@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
+    "build": "next build && opennextjs-cloudflare build --skipNextBuild",
     "dev": "next dev",
-    "build": "next build",
     "start": "next start",
     "lint": "next lint",
     "db:generate": "prisma generate",
@@ -12,9 +12,14 @@
     "db:migrate": "prisma migrate dev",
     "db:seed": "tsx prisma/seed.ts",
     "db:studio": "prisma studio",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
+    "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
+    "upload": "opennextjs-cloudflare build && opennextjs-cloudflare upload",
+    "cf-typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts"
   },
   "dependencies": {
+    "@mediapipe/pose": "^0.5.1675469404",
     "@prisma/client": "^6.2.0",
     "@radix-ui/react-avatar": "^1.1.3",
     "@radix-ui/react-checkbox": "^1.1.4",
@@ -32,7 +37,6 @@
     "@radix-ui/react-tooltip": "^1.1.8",
     "@supabase/auth-helpers-nextjs": "^0.10.0",
     "@supabase/supabase-js": "^2.49.1",
-    "@mediapipe/pose": "^0.5.1675469404",
     "@tensorflow/tfjs": "^4.22.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -48,6 +52,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@opennextjs/cloudflare": "^1.20.18",
     "@types/node": "^22.10.5",
     "@types/react": "^19.0.3",
     "@types/react-dom": "^19.0.2",
@@ -59,6 +64,7 @@
     "prisma": "^6.2.0",
     "tailwindcss": "^3.4.17",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "wrangler": "^4.166.0"
   }
 }
