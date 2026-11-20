@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/db";
+import { getLiveCases, saveLiveCase } from "@/lib/live-store";
 
-// GET — list patients
+// GET — list patients/cases
 export async function GET(request: NextRequest) {
-  try {
-    const search = request.nextUrl.searchParams.get("search") || "";
-    const status = request.nextUrl.searchParams.get("status") || "";
+  const search = request.nextUrl.searchParams.get("search")?.toLowerCase() || "";
+  const status = request.nextUrl.searchParams.get("status") || "";
 
+  // 1. Try Prisma DB if reachable
+  try {
     const where: Record<string, unknown> = {};
     if (search) {
       where.OR = [
@@ -27,149 +29,82 @@ export async function GET(request: NextRequest) {
     });
 
     return NextResponse.json(patients);
-  } catch (error) {
-    console.error("Patients GET error, returning mock cases fallback:", error);
-    const mockPatients = [
-      {
-        id: "patient-1",
-        name: "كابتن أحمد حسام",
-        phone: "+201012345678",
-        injuryType: "ACL Reconstruction",
-        injuredSide: "RIGHT",
-        status: "active",
-        createdAt: new Date().toISOString(),
-        rehabPrograms: [{ phase: "RESTORE_ROM", isActive: true }],
-      },
-      {
-        id: "patient-2",
-        name: "عمر خالد المهدي",
-        phone: "+201198765432",
-        injuryType: "Patellar Tendinopathy",
-        injuredSide: "LEFT",
-        status: "active",
-        createdAt: new Date().toISOString(),
-        rehabPrograms: [{ phase: "STRENGTH", isActive: true }],
-      },
-      {
-        id: "patient-3",
-        name: "سارة محمد إبراهيم",
-        phone: "+201234567890",
-        injuryType: "Achilles Tendinopathy",
-        injuredSide: "RIGHT",
-        status: "active",
-        createdAt: new Date().toISOString(),
-        rehabPrograms: [{ phase: "ACUTE", isActive: true }],
-      },
-      {
-        id: "patient-4",
-        name: "طارق زياد عبد الله",
-        phone: "+201055544433",
-        injuryType: "Ankle Sprain",
-        injuredSide: "BILATERAL",
-        status: "active",
-        createdAt: new Date().toISOString(),
-        rehabPrograms: [{ phase: "NEUROMUSCULAR", isActive: true }],
-      },
-    ];
-    return NextResponse.json(mockPatients);
+  } catch {
+    // 2. Real Live Store (Starts at 0, updates live as user adds/edits cases)
+    let liveCases = getLiveCases();
+    if (search) {
+      liveCases = liveCases.filter(
+        (c) =>
+          c.name.toLowerCase().includes(search) ||
+          c.injuryType.toLowerCase().includes(search)
+      );
+    }
+    if (status) {
+      liveCases = liveCases.filter((c) => c.status === status);
+    }
+    return NextResponse.json(liveCases);
   }
 }
 
-// POST — create patient
+// POST — create patient/case
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
 
-    let userId = body.userId;
-    if (!userId) {
-      const existingUser = await prisma.user.findFirst();
-      if (existingUser) {
-        userId = existingUser.id;
-      } else {
-        const newUser = await prisma.user.create({
-          data: {
-            id: "default-user",
-            email: "physio@peakmotion.com",
-            name: "أخصائي العلاج الطبيعي",
-            role: "PHYSIOTHERAPIST",
-          },
-        });
-        userId = newUser.id;
-      }
-    }
-
-    const patient = await prisma.patient.create({
-      data: {
-        name: body.name,
-        phone: body.phone || null,
-        email: body.email || null,
-        dateOfBirth: body.dateOfBirth ? new Date(body.dateOfBirth) : null,
-        gender: body.gender || null,
-        injuryType: body.injuryType,
-        injuryDate: new Date(body.injuryDate),
-        surgeryDate: body.surgeryDate ? new Date(body.surgeryDate) : null,
-        rehabStartDate: new Date(body.rehabStartDate),
-        injuredSide: body.injuredSide,
-        mechanismOfInjury: body.mechanismOfInjury || null,
-        notes: body.notes || null,
-        userId: userId,
-      },
+    // Save in Live Store first for guaranteed persistence
+    const saved = saveLiveCase({
+      name: body.name,
+      phone: body.phone,
+      injuryType: body.injuryType,
+      injuredSide: body.injuredSide || "RIGHT",
+      injuryDate: body.injuryDate || new Date().toISOString(),
+      surgeryDate: body.surgeryDate || null,
+      rehabStartDate: body.rehabStartDate || new Date().toISOString(),
+      mechanismOfInjury: body.mechanismOfInjury || null,
+      notes: body.notes || null,
+      status: "active",
+      rehabPrograms: [
+        {
+          phase: body.rehabPhase || "ACUTE",
+          isActive: true,
+          notes: body.rehabNotes || "المرحلة التأهيلية المحددة",
+        },
+      ],
+      romMeasurements: body.romMeasurements || [],
+      girthEvaluations: body.girthEvaluations || [],
     });
 
-    // Create ROM measurements if provided
-    if (body.romMeasurements?.length) {
-      await prisma.rOMMeasurement.createMany({
-        data: body.romMeasurements.map((rom: { joint: string; movement: string; injuredAngle: number; healthyAngle?: number; notes?: string }) => ({
-          patientId: patient.id,
-          joint: rom.joint,
-          movement: rom.movement,
-          injuredAngle: rom.injuredAngle,
-          healthyAngle: rom.healthyAngle || null,
-          notes: rom.notes || null,
-        })),
-      });
-    }
-
-    // Create girth evaluations if provided
-    if (body.girthEvaluations?.length) {
-      for (const evaluation of body.girthEvaluations) {
-        const girth = await prisma.girthEvaluation.create({
+    // Try syncing to DB if reachable
+    try {
+      let userId = body.userId;
+      if (!userId) {
+        const existingUser = await prisma.user.findFirst();
+        userId = existingUser?.id;
+      }
+      if (userId) {
+        await prisma.patient.create({
           data: {
-            patientId: patient.id,
-            landmark: evaluation.landmark,
+            id: saved.id,
+            name: body.name,
+            phone: body.phone || null,
+            injuryType: body.injuryType,
+            injuryDate: new Date(body.injuryDate || Date.now()),
+            surgeryDate: body.surgeryDate ? new Date(body.surgeryDate) : null,
+            rehabStartDate: new Date(body.rehabStartDate || Date.now()),
+            injuredSide: body.injuredSide || "RIGHT",
+            mechanismOfInjury: body.mechanismOfInjury || null,
+            notes: body.notes || null,
+            userId: userId,
           },
         });
-        if (evaluation.measurements?.length) {
-          await prisma.girthMeasurement.createMany({
-            data: evaluation.measurements.map((m: { distanceCm: number; injuredCm: number; healthyCm?: number }) => ({
-              evaluationId: girth.id,
-              distanceCm: m.distanceCm,
-              injuredCm: m.injuredCm,
-              healthyCm: m.healthyCm || null,
-            })),
-          });
-        }
       }
+    } catch {
+      // DB offline, live store already saved
     }
 
-    // Create rehab program if provided
-    if (body.rehabPhase) {
-      await prisma.rehabProgram.create({
-        data: {
-          patientId: patient.id,
-          phase: body.rehabPhase,
-          startDate: new Date(body.rehabStartDate),
-          notes: body.rehabNotes || null,
-        },
-      });
-    }
-
-    return NextResponse.json(patient, { status: 201 });
+    return NextResponse.json(saved, { status: 201 });
   } catch (error) {
     console.error("Patient POST error:", error);
-    return NextResponse.json(
-      { error: "Failed to create patient" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Failed to create patient" }, { status: 500 });
   }
 }

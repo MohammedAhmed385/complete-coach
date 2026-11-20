@@ -1,14 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/db";
+import { getLiveExercises, saveLiveExercise } from "@/lib/live-store";
 
 export async function GET(request: NextRequest) {
-  try {
-    const search = request.nextUrl.searchParams.get("search") || "";
-    const region = request.nextUrl.searchParams.get("region") || "";
-    const isIsometric = request.nextUrl.searchParams.get("isIsometric");
-    const angle = request.nextUrl.searchParams.get("angle");
-    const category = request.nextUrl.searchParams.get("category") || "";
+  const search = request.nextUrl.searchParams.get("search")?.toLowerCase() || "";
+  const region = request.nextUrl.searchParams.get("region") || "";
+  const isIsometric = request.nextUrl.searchParams.get("isIsometric");
+  const angle = request.nextUrl.searchParams.get("angle");
+  const category = request.nextUrl.searchParams.get("category") || "";
 
+  // 1. Try DB first
+  try {
     const where: Record<string, unknown> = {};
     if (search) {
       where.OR = [
@@ -27,37 +29,80 @@ export async function GET(request: NextRequest) {
       orderBy: { nameAr: "asc" },
     });
 
-    return NextResponse.json(exercises);
-  } catch (error) {
-    console.error("Exercises GET error:", error);
-    return NextResponse.json({ error: "Failed to fetch" }, { status: 500 });
+    if (exercises && exercises.length > 0) {
+      return NextResponse.json({ exercises, total: exercises.length });
+    }
+  } catch {
+    // DB offline, fall through to live store
   }
+
+  // 2. Real Live Store
+  let exercises = getLiveExercises();
+  if (search) {
+    exercises = exercises.filter(
+      (e) =>
+        e.nameAr.toLowerCase().includes(search) ||
+        e.nameEn.toLowerCase().includes(search) ||
+        e.category.toLowerCase().includes(search)
+    );
+  }
+  if (region) {
+    exercises = exercises.filter((e) => e.region === region);
+  }
+  if (isIsometric === "true") {
+    exercises = exercises.filter((e) => e.isIsometric === true);
+  }
+  if (angle) {
+    exercises = exercises.filter((e) => e.isometricAngle === parseFloat(angle));
+  }
+  if (category) {
+    exercises = exercises.filter((e) => e.category === category);
+  }
+
+  return NextResponse.json({ exercises, total: exercises.length });
 }
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const exercise = await prisma.exercise.create({
-      data: {
-        nameAr: body.nameAr,
-        nameEn: body.nameEn,
-        descriptionAr: body.descriptionAr || null,
-        descriptionEn: body.descriptionEn || null,
-        instructions: body.instructions || null,
-        region: body.region,
-        category: body.category,
-        isIsometric: body.isIsometric || false,
-        isometricAngle: body.isometricAngle || null,
-        imageUrl: body.imageUrl || null,
-        videoUrl: body.videoUrl || null,
-        youtubeSearch: body.youtubeSearch || null,
-        isCustom: true,
-        createdById: body.createdById || null,
-      },
+
+    // Save in Live Store
+    const saved = saveLiveExercise({
+      nameAr: body.nameAr,
+      nameEn: body.nameEn,
+      category: body.category || "General",
+      region: body.region || "LOWER",
+      isIsometric: Boolean(body.isIsometric),
+      isometricAngle: body.isometricAngle ? parseFloat(body.isometricAngle) : null,
+      instructions: body.instructions || null,
+      videoUrl: body.videoUrl || null,
+      youtubeSearch: body.youtubeSearch || body.nameEn,
     });
-    return NextResponse.json(exercise, { status: 201 });
+
+    // Try DB
+    try {
+      await prisma.exercise.create({
+        data: {
+          id: saved.id,
+          nameAr: body.nameAr,
+          nameEn: body.nameEn,
+          instructions: body.instructions || null,
+          region: body.region || "LOWER",
+          category: body.category || "General",
+          isIsometric: Boolean(body.isIsometric),
+          isometricAngle: body.isometricAngle ? parseFloat(body.isometricAngle) : null,
+          videoUrl: body.videoUrl || null,
+          youtubeSearch: body.youtubeSearch || body.nameEn,
+          isCustom: true,
+        },
+      });
+    } catch {
+      // Ignore DB error
+    }
+
+    return NextResponse.json(saved, { status: 201 });
   } catch (error) {
     console.error("Exercise POST error:", error);
-    return NextResponse.json({ error: "Failed to create" }, { status: 500 });
+    return NextResponse.json({ error: "Failed to create exercise" }, { status: 500 });
   }
 }

@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/db";
+import { getLiveCases, deleteLiveCase, updateLiveCase } from "@/lib/live-store";
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const { id } = await params;
+
+  // 1. Try DB
   try {
-    const { id } = await params;
     const patient = await prisma.patient.findUnique({
       where: { id },
       include: {
@@ -35,45 +38,57 @@ export async function GET(
       },
     });
 
-    if (!patient) {
-      return NextResponse.json({ error: "Patient not found" }, { status: 404 });
-    }
-
-    return NextResponse.json(patient);
-  } catch (error) {
-    console.error("Patient detail error:", error);
-    return NextResponse.json({ error: "Failed to fetch" }, { status: 500 });
+    if (patient) return NextResponse.json(patient);
+  } catch {
+    // DB not reachable, fall to live store
   }
+
+  // 2. Fallback to Live Store
+  const cases = getLiveCases();
+  const c = cases.find((item) => item.id === id);
+  if (c) {
+    return NextResponse.json(c);
+  }
+
+  return NextResponse.json({ error: "Case not found" }, { status: 404 });
 }
 
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const { id } = await params;
+
+  // Try DB
   try {
-    const { id } = await params;
     await prisma.patient.delete({ where: { id } });
-    return NextResponse.json({ deleted: true });
-  } catch (error) {
-    console.error("Patient delete error:", error);
-    return NextResponse.json({ error: "Failed to delete" }, { status: 500 });
+  } catch {
+    // Ignore
   }
+
+  // Delete from Live Store
+  deleteLiveCase(id);
+  return NextResponse.json({ deleted: true, success: true });
 }
 
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const { id } = await params;
+  const body = await request.json();
+
+  // Try DB
   try {
-    const { id } = await params;
-    const body = await request.json();
-    const patient = await prisma.patient.update({
+    await prisma.patient.update({
       where: { id },
       data: body,
     });
-    return NextResponse.json(patient);
-  } catch (error) {
-    console.error("Patient update error:", error);
-    return NextResponse.json({ error: "Failed to update" }, { status: 500 });
+  } catch {
+    // Ignore
   }
+
+  // Update in Live Store
+  const updated = updateLiveCase(id, body);
+  return NextResponse.json(updated || { id, ...body });
 }

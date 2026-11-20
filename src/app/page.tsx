@@ -3,634 +3,1073 @@
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import {
-  UserPlus,
-  FolderHeart,
-  Dumbbell,
-  FileHeart,
-  Search,
-  CheckCircle2,
-  Video,
-  BrainCircuit,
-  BarChart3,
-  Users,
-  Calendar,
   Activity,
-  ArrowLeft,
+  UserPlus,
+  Dumbbell,
+  FolderHeart,
+  Plus,
+  Edit,
+  Trash2,
+  Eye,
+  Search,
+  Filter,
+  ShieldCheck,
+  CheckCircle2,
+  Calendar,
+  Phone,
+  MessageCircle,
+  ExternalLink,
   RefreshCw,
   Sparkles,
-  TrendingUp,
-  ShieldCheck,
-  Stethoscope,
+  Play,
+  RotateCcw,
+  AlertCircle,
+  Check,
+  ArrowRight,
+  Info,
+  Layers,
 } from "lucide-react";
-
-import {
-  Card,
-  CardHeader,
-  CardTitle,
-  CardDescription,
-  CardContent,
-} from "@/components/ui/card";
+import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { cn } from "@/lib/utils";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { useAuth } from "@/lib/auth-context";
+import { getPhaseLabel, generateWhatsAppShareLink } from "@/lib/utils";
 
-interface DashboardStats {
-  casesCount: number;
-  todayAppointmentsCount: number;
-  exercisesCount: number;
-  protocolsCount: number;
-}
+// ── TYPES ──
 
-interface ModuleItem {
+interface CaseItem {
   id: string;
-  titleAr: string;
-  titleEn: string;
-  descriptionAr: string;
-  href: string;
-  icon: React.ComponentType<{ className?: string }>;
-  gradient: string;
-  badgeText: string;
-  badgeVariant?: "default" | "secondary" | "outline" | "success" | "warning";
+  name: string;
+  phone?: string | null;
+  injuryType: string;
+  injuredSide: "RIGHT" | "LEFT" | "BILATERAL";
+  injuryDate?: string;
+  rehabStartDate?: string;
+  status?: string;
+  notes?: string | null;
+  rehabPrograms?: Array<{
+    phase: string;
+    notes?: string | null;
+    isActive: boolean;
+  }>;
+  romMeasurements?: Array<{
+    joint: string;
+    movement: string;
+    injuredAngle: number;
+    healthyAngle?: number | null;
+  }>;
 }
 
-const MODULES: ModuleItem[] = [
-  {
-    id: "add-case",
-    titleAr: "إضافة حالة",
-    titleEn: "Add Case",
-    descriptionAr:
-      "تسجيل مريض جديد، قياس المدى الحركي (ROM)، تقييم محيط العضلات (Girth)، وتوثيق آلية الإصابة السريرية.",
-    href: "/add-case",
-    icon: UserPlus,
-    gradient: "from-emerald-500 to-teal-600",
-    badgeText: "تسجيل فوري",
-    badgeVariant: "default",
-  },
-  {
-    id: "cases",
-    titleAr: "الحالات المحفوظة",
-    titleEn: "Saved Cases",
-    descriptionAr:
-      "إدارة ملفات المرضى، متابعة تطور مراحل التأهيل، تعديل القياسات، ومشاركة ملخص الحالة عبر WhatsApp.",
-    href: "/cases",
-    icon: FolderHeart,
-    gradient: "from-teal-600 to-cyan-700",
-    badgeText: "سجلات المرضى",
-    badgeVariant: "secondary",
-  },
-  {
-    id: "exercises",
-    titleAr: "مكتبة التمارين",
-    titleEn: "Exercise Library",
-    descriptionAr:
-      "دليل التمارين السريرية المصنفة، تمارين الانقباض الثابت (Isometrics) بزوايا محددة، وخطط التقوية.",
-    href: "/exercises",
-    icon: Dumbbell,
-    gradient: "from-emerald-600 to-emerald-800",
-    badgeText: "تأهيل حركي",
-    badgeVariant: "success",
-  },
-  {
-    id: "protocols",
-    titleAr: "البروتوكولات",
-    titleEn: "Protocols",
-    descriptionAr:
-      "بروتوكولات التأهيل المقسمة إلى 6 مراحل، علامات الخطر (Red Flags)، ومعايير التقدم السريري لكل مرحلة.",
-    href: "/protocols",
-    icon: FileHeart,
-    gradient: "from-sky-600 to-blue-700",
-    badgeText: "أدلة سريرية",
-    badgeVariant: "secondary",
-  },
-  {
-    id: "research",
-    titleAr: "الأبحاث",
-    titleEn: "Research",
-    descriptionAr:
-      "بحث مباشر في مكتبة PubMed الطبية لاستعراض أحدث الأوراق والمراجعات المنهجية في العلاج الطبيعي.",
-    href: "/research",
-    icon: Search,
-    gradient: "from-indigo-600 to-navy-800",
-    badgeText: "PubMed Direct",
-    badgeVariant: "outline",
-  },
-  {
-    id: "return-to-play",
-    titleAr: "شروط النزول",
-    titleEn: "Return to Play (RTP)",
-    descriptionAr:
-      "معايير الجاهزية الرياضية الموضوعية، اختبارات التماثل الطرفي (LSI)، وتقييم الأمان قبل العودة للمنافسة.",
-    href: "/return-to-play",
-    icon: CheckCircle2,
-    gradient: "from-teal-500 to-emerald-700",
-    badgeText: "اختبارات الجاهزية",
-    badgeVariant: "success",
-  },
-  {
-    id: "online-followup",
-    titleAr: "متابعة أونلاين",
-    titleEn: "Online Follow-up",
-    descriptionAr:
-      "إدارة الاستشارات المرئية عن بُعد، تتبع التزام التمارين المنزلية، والتواصل السريري المستمر.",
-    href: "/online-followup",
-    icon: Video,
-    gradient: "from-cyan-600 to-blue-600",
-    badgeText: "عن بُعد",
-    badgeVariant: "secondary",
-  },
-  {
-    id: "ai-analysis",
-    titleAr: "تحليل الحركة AI",
-    titleEn: "AI Analysis",
-    descriptionAr:
-      "تحليل الفيديو بتقدير الوضعية (Pose Estimation)، قياس زوايا المفاصل آلياً، واكتشاف الأنماط الحركية المعيبة.",
-    href: "/ai-analysis",
-    icon: BrainCircuit,
-    gradient: "from-violet-600 to-purple-800",
-    badgeText: "ذكاء اصطناعي",
-    badgeVariant: "default",
-  },
-  {
-    id: "analytics",
-    titleAr: "الإحصائيات",
-    titleEn: "Analytics",
-    descriptionAr:
-      "لوحة تحليل البيانات، معدلات استعادة المدى الحركي، نسب الإنجاز للمرضى، والتقارير الدورية للعيادة.",
-    href: "/analytics",
-    icon: BarChart3,
-    gradient: "from-slate-700 to-navy-950",
-    badgeText: "مؤشرات الأداء",
-    badgeVariant: "outline",
-  },
-];
+interface ExerciseItem {
+  id: string;
+  nameAr: string;
+  nameEn: string;
+  category: string;
+  region: "UPPER" | "LOWER" | "CORE" | "FULL_BODY";
+  isIsometric: boolean;
+  isometricAngle?: number | null;
+  instructions?: string | null;
+  youtubeSearch?: string | null;
+}
 
-export default function HomeDashboardPage() {
-  const [stats, setStats] = useState<DashboardStats>({
-    casesCount: 0,
-    todayAppointmentsCount: 0,
-    exercisesCount: 0,
-    protocolsCount: 0,
+export default function HomePage() {
+  const { user, isAdmin, loginAsAdmin } = useAuth();
+
+  const [activeMainTab, setActiveMainTab] = useState<"cases" | "exercises">("cases");
+  const [cases, setCases] = useState<CaseItem[]>([]);
+  const [exercises, setExercises] = useState<ExerciseItem[]>([]);
+  const [isLoadingCases, setIsLoadingCases] = useState(true);
+  const [isLoadingExercises, setIsLoadingExercises] = useState(true);
+
+  // Search & Filters
+  const [searchQuery, setSearchQuery] = useState("");
+  const [exerciseRegionFilter, setExerciseRegionFilter] = useState<string>("ALL");
+
+  // Case Modals
+  const [selectedCaseForDetail, setSelectedCaseForDetail] = useState<CaseItem | null>(null);
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+
+  // Admin Case Edit Modal
+  const [editingCase, setEditingCase] = useState<CaseItem | null>(null);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [isSavingCase, setIsSavingCase] = useState(false);
+
+  // Admin Add Case Modal
+  const [isAddCaseModalOpen, setIsAddCaseModalOpen] = useState(false);
+  const [newCaseForm, setNewCaseForm] = useState({
+    name: "",
+    phone: "",
+    injuryType: "",
+    injuredSide: "RIGHT" as "RIGHT" | "LEFT" | "BILATERAL",
+    rehabPhase: "RESTORE_ROM",
+    notes: "",
   });
-  const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [hasError, setHasError] = useState<boolean>(false);
-  const [currentDateFormatted, setCurrentDateFormatted] = useState<string>("");
 
+  // Exercise Detail Modal
+  const [selectedExercise, setSelectedExercise] = useState<ExerciseItem | null>(null);
+  const [isExerciseDetailOpen, setIsExerciseDetailOpen] = useState(false);
+
+  // Admin Add Exercise Modal
+  const [isAddExerciseModalOpen, setIsAddExerciseModalOpen] = useState(false);
+  const [newExerciseForm, setNewExerciseForm] = useState({
+    nameAr: "",
+    nameEn: "",
+    category: "Quadriceps & Knee",
+    region: "LOWER" as "UPPER" | "LOWER" | "CORE" | "FULL_BODY",
+    isIsometric: false,
+    isometricAngle: "45",
+    instructions: "",
+  });
+
+  // Load Data on Mount
   useEffect(() => {
-    // Format Arabic date on client
-    try {
-      const now = new Date();
-      const options: Intl.DateTimeFormatOptions = {
-        weekday: "long",
-        year: "numeric",
-        month: "long",
-        day: "numeric",
-      };
-      setCurrentDateFormatted(now.toLocaleDateString("ar-EG", options));
-    } catch {
-      setCurrentDateFormatted(new Date().toDateString());
-    }
+    fetchCases();
+    fetchExercises();
   }, []);
 
-  const fetchStats = async () => {
-    setIsLoading(true);
-    setHasError(false);
-
+  const fetchCases = async () => {
+    setIsLoadingCases(true);
     try {
-      const [casesRes, apptsRes, exercisesRes, protocolsRes] =
-        await Promise.allSettled([
-          fetch("/api/cases"),
-          fetch("/api/appointments"),
-          fetch("/api/exercises"),
-          fetch("/api/protocols"),
-        ]);
-
-      let casesCount = 0;
-      let todayAppointmentsCount = 0;
-      let exercisesCount = 0;
-      let protocolsCount = 0;
-
-      if (casesRes.status === "fulfilled" && casesRes.value.ok) {
-        const data = await casesRes.value.json();
-        if (Array.isArray(data)) {
-          casesCount = data.length;
-        }
+      const res = await fetch("/api/cases");
+      if (res.ok) {
+        const data = await res.json();
+        setCases(Array.isArray(data) ? data : []);
       }
-
-      if (apptsRes.status === "fulfilled" && apptsRes.value.ok) {
-        const data = await apptsRes.value.json();
-        if (Array.isArray(data)) {
-          const now = new Date();
-          todayAppointmentsCount = data.filter((appt: { date?: string }) => {
-            if (!appt.date) return false;
-            const apptDate = new Date(appt.date);
-            return (
-              apptDate.getFullYear() === now.getFullYear() &&
-              apptDate.getMonth() === now.getMonth() &&
-              apptDate.getDate() === now.getDate()
-            );
-          }).length;
-        }
-      }
-
-      if (exercisesRes.status === "fulfilled" && exercisesRes.value.ok) {
-        const data = await exercisesRes.value.json();
-        if (Array.isArray(data)) {
-          exercisesCount = data.length;
-        }
-      }
-
-      if (protocolsRes.status === "fulfilled" && protocolsRes.value.ok) {
-        const data = await protocolsRes.value.json();
-        if (Array.isArray(data)) {
-          protocolsCount = data.length;
-        }
-      }
-
-      setStats({
-        casesCount,
-        todayAppointmentsCount,
-        exercisesCount,
-        protocolsCount,
-      });
-    } catch (error) {
-      console.error("Dashboard stats fetch error:", error);
-      setHasError(true);
+    } catch (err) {
+      console.error("Failed to load cases:", err);
     } finally {
-      setIsLoading(false);
+      setIsLoadingCases(false);
     }
   };
 
-  useEffect(() => {
-    fetchStats();
-  }, []);
+  const fetchExercises = async () => {
+    setIsLoadingExercises(true);
+    try {
+      const res = await fetch("/api/exercises");
+      if (res.ok) {
+        const data = await res.json();
+        setExercises(data.exercises || []);
+      }
+    } catch (err) {
+      console.error("Failed to load exercises:", err);
+    } finally {
+      setIsLoadingExercises(false);
+    }
+  };
+
+  // ── ADMIN ACTIONS: CASES ──
+
+  const handleCreateCase = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newCaseForm.name.trim() || !newCaseForm.injuryType.trim()) {
+      alert("يرجى إدخال اسم المريض ونوع الإصابة");
+      return;
+    }
+
+    setIsSavingCase(true);
+    try {
+      const res = await fetch("/api/cases", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: newCaseForm.name,
+          phone: newCaseForm.phone || null,
+          injuryType: newCaseForm.injuryType,
+          injuredSide: newCaseForm.injuredSide,
+          injuryDate: new Date().toISOString(),
+          rehabStartDate: new Date().toISOString(),
+          rehabPhase: newCaseForm.rehabPhase,
+          notes: newCaseForm.notes,
+        }),
+      });
+
+      if (res.ok) {
+        const created = await res.json();
+        setCases([created, ...cases]);
+        setIsAddCaseModalOpen(false);
+        setNewCaseForm({
+          name: "",
+          phone: "",
+          injuryType: "",
+          injuredSide: "RIGHT",
+          rehabPhase: "RESTORE_ROM",
+          notes: "",
+        });
+      }
+    } catch (err) {
+      console.error("Error creating case:", err);
+    } finally {
+      setIsSavingCase(false);
+    }
+  };
+
+  const handleUpdateCase = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingCase) return;
+
+    setIsSavingCase(true);
+    try {
+      const res = await fetch(`/api/cases/${editingCase.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(editingCase),
+      });
+
+      if (res.ok) {
+        setCases(cases.map((c) => (c.id === editingCase.id ? editingCase : c)));
+        setIsEditModalOpen(false);
+        setEditingCase(null);
+      }
+    } catch (err) {
+      console.error("Error updating case:", err);
+    } finally {
+      setIsSavingCase(false);
+    }
+  };
+
+  const handleDeleteCase = async (id: string, name: string) => {
+    if (!confirm(`هل أنت متأكد من حذف حالة (${name}) نهائياً؟`)) return;
+
+    try {
+      const res = await fetch(`/api/cases/${id}`, { method: "DELETE" });
+      if (res.ok) {
+        setCases(cases.filter((c) => c.id !== id));
+      }
+    } catch (err) {
+      console.error("Error deleting case:", err);
+    }
+  };
+
+  // ── ADMIN ACTIONS: EXERCISES ──
+
+  const handleCreateExercise = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newExerciseForm.nameAr.trim()) {
+      alert("يرجى كتابة اسم التمرين");
+      return;
+    }
+
+    try {
+      const res = await fetch("/api/exercises", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          nameAr: newExerciseForm.nameAr,
+          nameEn: newExerciseForm.nameEn || newExerciseForm.nameAr,
+          category: newExerciseForm.category,
+          region: newExerciseForm.region,
+          isIsometric: newExerciseForm.isIsometric,
+          isometricAngle: newExerciseForm.isIsometric ? parseFloat(newExerciseForm.isometricAngle) : null,
+          instructions: newExerciseForm.instructions,
+        }),
+      });
+
+      if (res.ok) {
+        const created = await res.json();
+        setExercises([created, ...exercises]);
+        setIsAddExerciseModalOpen(false);
+        setNewExerciseForm({
+          nameAr: "",
+          nameEn: "",
+          category: "Quadriceps & Knee",
+          region: "LOWER",
+          isIsometric: false,
+          isometricAngle: "45",
+          instructions: "",
+        });
+      }
+    } catch (err) {
+      console.error("Error creating exercise:", err);
+    }
+  };
+
+  // Filtered views
+  const filteredCases = cases.filter((c) => {
+    const q = searchQuery.toLowerCase();
+    return (
+      c.name.toLowerCase().includes(q) ||
+      c.injuryType.toLowerCase().includes(q) ||
+      (c.phone && c.phone.includes(q))
+    );
+  });
+
+  const filteredExercises = exercises.filter((ex) => {
+    const q = searchQuery.toLowerCase();
+    const matchesSearch =
+      ex.nameAr.toLowerCase().includes(q) ||
+      ex.nameEn.toLowerCase().includes(q) ||
+      ex.category.toLowerCase().includes(q);
+    const matchesRegion =
+      exerciseRegionFilter === "ALL" || ex.region === exerciseRegionFilter;
+    return matchesSearch && matchesRegion;
+  });
 
   return (
-    <div className="min-h-screen bg-slate-50/70 pb-16">
-      {/* ─────────────────────────────────────────────────────────────
-          HERO / WELCOME HEADER
-      ───────────────────────────────────────────────────────────── */}
-      <section className="relative overflow-hidden bg-gradient-to-br from-navy-950 via-navy-900 to-slate-900 text-white shadow-xl">
-        {/* Subtle decorative background glow circles */}
-        <div className="absolute -top-24 -right-24 w-96 h-96 bg-emerald-500/15 rounded-full blur-3xl pointer-events-none" />
-        <div className="absolute -bottom-24 -left-24 w-96 h-96 bg-teal-500/10 rounded-full blur-3xl pointer-events-none" />
+    <div className="min-h-screen bg-slate-50/80 py-8 px-4 sm:px-6 lg:px-8">
+      <div className="max-w-7xl mx-auto space-y-8">
 
-        <div className="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-10 sm:py-14 relative z-10">
-          <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6">
-            <div className="space-y-3 max-w-3xl">
-              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs sm:text-sm font-medium backdrop-blur-sm">
-                <Activity className="w-4 h-4 text-emerald-400 animate-pulse" />
-                <span>المنصة السريرية المتخصصة لتأهيل الإصابات الرياضية</span>
-                <span className="text-emerald-400/50">•</span>
-                <span className="text-slate-300 hidden sm:inline">
-                  Clinical Rehabilitation OS
-                </span>
+        {/* ── TOP LIVE BANNER & SEARCH ── */}
+        <div className="bg-gradient-to-r from-navy-950 via-slate-900 to-navy-900 rounded-3xl p-6 sm:p-8 text-white shadow-xl border border-white/10 relative overflow-hidden">
+          <div className="absolute top-0 left-0 w-96 h-96 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
+
+          <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Badge className="bg-emerald-500/20 text-emerald-300 border-emerald-500/30 text-xs px-3 py-1 font-bold gap-1.5 shadow-sm">
+                  <Activity className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
+                  <span>منصة Revive السريرية التفاعلية</span>
+                </Badge>
+
+                {isAdmin ? (
+                  <Badge className="bg-amber-400 text-slate-950 font-black text-xs gap-1">
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    <span>وضع المدير (Admin Mode — تعديل كامل)</span>
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="text-slate-300 border-white/20 text-xs">
+                    وضع القراءة والاستعراض
+                  </Badge>
+                )}
               </div>
 
-              <h1 className="text-2xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-white leading-tight">
-                Revive —{" "}
-                <span className="text-transparent bg-clip-text bg-gradient-to-l from-emerald-400 to-teal-200">
-                  إدارة الحالات والبرامج التأهيلية
-                </span>
+              <h1 className="text-2xl sm:text-4xl font-black text-white tracking-tight">
+                دليل الحالات والبرامج التأهيلية السريرية
               </h1>
-
-              <p className="text-sm sm:text-base text-slate-300 leading-relaxed max-w-2xl">
-                متابعة دقيقة لمراحل الشفاء، قياس المدى الحركي (ROM) ومحيط
-                العضلات، تطبيق بروتوكولات التأهيل المبنية على الدلائل السريرية
-                (Evidence-Based)، واختبارات الجاهزية للعودة للملعب (Return to
-                Play).
+              <p className="text-xs sm:text-sm text-slate-300 max-w-2xl leading-relaxed">
+                استعراض فوري لبرامج تعافي المرضى، قياسات المدى الحركي (ROM)، ومكتبة التمارين المعتمدة لإصابات الملاعب
               </p>
+            </div>
 
-              {currentDateFormatted && (
-                <div className="flex items-center gap-2 text-xs sm:text-sm text-slate-400 pt-1">
-                  <Calendar className="w-4 h-4 text-emerald-400" />
-                  <span>{currentDateFormatted}</span>
+            {/* Quick Actions */}
+            <div className="flex items-center gap-3 flex-wrap">
+              {isAdmin ? (
+                <>
+                  <Button
+                    onClick={() => setIsAddCaseModalOpen(true)}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs gap-1.5 shadow-md shadow-emerald-600/30"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>إضافة حالة مريض</span>
+                  </Button>
+
+                  <Button
+                    onClick={() => setIsAddExerciseModalOpen(true)}
+                    className="bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs gap-1.5 shadow-md shadow-blue-600/30"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>إضافة تمرين</span>
+                  </Button>
+                </>
+              ) : (
+                <Link
+                  href="/contact"
+                  className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-2 shadow-md shadow-emerald-600/30 transition-all"
+                >
+                  <MessageCircle className="w-4 h-4" />
+                  <span>حجز استشارة أو تقييم حالة</span>
+                </Link>
+              )}
+            </div>
+          </div>
+
+          {/* Quick Search Bar */}
+          <div className="relative mt-6">
+            <Search className="w-4 h-4 text-slate-400 absolute right-4 top-3.5" />
+            <Input
+              placeholder="ابحث بالاسم، نوع الإصابة (مثل ACL, Tendinopathy)، أو اسم التمرين..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pr-11 h-11 bg-white/10 border-white/20 text-white placeholder:text-slate-400 rounded-2xl text-xs focus:bg-white/20 focus:border-emerald-400 transition-all"
+            />
+          </div>
+        </div>
+
+        {/* ── MAIN DUAL TABS: CASES vs EXERCISES ── */}
+        <div className="space-y-6">
+          <div className="flex items-center justify-between border-b border-slate-200 pb-3 flex-wrap gap-4">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setActiveMainTab("cases")}
+                className={`flex items-center gap-2 px-5 py-2.5 rounded-2xl font-bold text-sm transition-all ${
+                  activeMainTab === "cases"
+                    ? "bg-navy-950 text-white shadow-md"
+                    : "bg-white text-slate-600 hover:bg-slate-100 border border-slate-200"
+                }`}
+              >
+                <FolderHeart className="w-4 h-4 text-emerald-400" />
+                <span>سجل الحالات التأهيلية ({cases.length})</span>
+              </button>
+
+              <button
+                onClick={() => setActiveMainTab("exercises")}
+                className={`flex items-center gap-2 px-5 py-2.5 rounded-2xl font-bold text-sm transition-all ${
+                  activeMainTab === "exercises"
+                    ? "bg-navy-950 text-white shadow-md"
+                    : "bg-white text-slate-600 hover:bg-slate-100 border border-slate-200"
+                }`}
+              >
+                <Dumbbell className="w-4 h-4 text-blue-400" />
+                <span>دليل التمارين المعتمدة ({exercises.length})</span>
+              </button>
+            </div>
+
+            {/* Region Filter for Exercises */}
+            {activeMainTab === "exercises" && (
+              <div className="flex items-center gap-1.5 overflow-x-auto text-xs">
+                {["ALL", "LOWER", "UPPER", "CORE"].map((r) => (
+                  <button
+                    key={r}
+                    onClick={() => setExerciseRegionFilter(r)}
+                    className={`px-3 py-1.5 rounded-xl font-semibold transition-all ${
+                      exerciseRegionFilter === r
+                        ? "bg-emerald-600 text-white shadow-sm"
+                        : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
+                    }`}
+                  >
+                    {r === "ALL" ? "الكل" : r === "LOWER" ? "الطرف السفلي" : r === "UPPER" ? "الطرف العلوي" : "الجذع والعمود الفقري"}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* ══════════════════════════════════════════════
+              SECTION 1: CLINICAL CASES SHOWCASE
+              ══════════════════════════════════════════════ */}
+          {activeMainTab === "cases" && (
+            <div className="space-y-6">
+
+              {/* Case Listing */}
+              {isLoadingCases ? (
+                <div className="text-center py-16 space-y-3">
+                  <RefreshCw className="w-8 h-8 text-emerald-600 animate-spin mx-auto" />
+                  <p className="text-xs text-slate-500 font-semibold">جاري جلب سجلات الحالات السريرية...</p>
+                </div>
+              ) : filteredCases.length === 0 ? (
+                /* ZERO CASES EMPTY STATE */
+                <Card className="rounded-3xl border-dashed border-2 border-slate-300 p-12 text-center bg-white/60 space-y-4">
+                  <div className="w-16 h-16 mx-auto rounded-3xl bg-emerald-50 text-emerald-600 flex items-center justify-center shadow-inner">
+                    <FolderHeart className="w-8 h-8" />
+                  </div>
+                  <div className="space-y-1.5 max-w-md mx-auto">
+                    <h3 className="text-lg font-bold text-slate-900">
+                      لا توجد حالات مسجلة حالياً
+                    </h3>
+                    <p className="text-xs text-slate-500 leading-relaxed">
+                      {isAdmin
+                        ? "النظام مصفّر وجاهز لإضافة أول مريض أو حالة تأهيلية جديدة خاصة بعيادتك."
+                        : "جاري تحديث السجلات السريرية من قِبل الأخصائي. يمكنك التواصل المباشر لحجز أول جلسة أو استشارة."}
+                    </p>
+                  </div>
+
+                  {isAdmin ? (
+                    <Button
+                      onClick={() => setIsAddCaseModalOpen(true)}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs px-6 py-2.5 shadow-md shadow-emerald-600/20"
+                    >
+                      <Plus className="w-4 h-4 me-1" />
+                      <span>إضافة أول حالة مريض الآن</span>
+                    </Button>
+                  ) : (
+                    <Link
+                      href="/contact"
+                      className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md shadow-emerald-600/20"
+                    >
+                      <MessageCircle className="w-4 h-4" />
+                      <span>تواصل معنا لتسجيل حالتك</span>
+                    </Link>
+                  )}
+                </Card>
+              ) : (
+                /* GRID OF LIVE CASES */
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {filteredCases.map((c) => {
+                    const activePhase = c.rehabPrograms?.find((p) => p.isActive)?.phase || "ACUTE";
+                    const phaseMeta = getPhaseLabel(activePhase);
+
+                    return (
+                      <Card
+                        key={c.id}
+                        className="rounded-3xl border-slate-200 shadow-sm hover:shadow-xl transition-all duration-300 bg-white overflow-hidden flex flex-col justify-between group"
+                      >
+                        <div className="h-2 bg-gradient-to-r from-emerald-500 to-teal-400" />
+
+                        <CardHeader className="p-5 pb-3">
+                          <div className="flex items-start justify-between gap-2 mb-2">
+                            <Badge className="bg-emerald-50 text-emerald-800 border-emerald-200 text-[10px] font-bold">
+                              {phaseMeta.ar}
+                            </Badge>
+
+                            <span className="text-[11px] text-slate-400 font-mono">
+                              {c.injuredSide === "RIGHT" ? "الطرف الأيمن" : c.injuredSide === "LEFT" ? "الطرف الأيسر" : "الطرفين"}
+                            </span>
+                          </div>
+
+                          <CardTitle className="text-lg font-black text-slate-900 group-hover:text-emerald-700 transition-colors">
+                            {c.name}
+                          </CardTitle>
+                          <CardDescription className="text-xs font-bold text-emerald-600">
+                            {c.injuryType}
+                          </CardDescription>
+                        </CardHeader>
+
+                        <CardContent className="px-5 pb-4 space-y-3 text-xs text-slate-600">
+                          {c.phone && (
+                            <div className="flex items-center gap-1.5 text-slate-500 font-mono" dir="ltr">
+                              <Phone className="w-3.5 h-3.5 text-slate-400" />
+                              <span>{c.phone}</span>
+                            </div>
+                          )}
+
+                          {c.notes && (
+                            <p className="text-[11px] text-slate-500 line-clamp-2 bg-slate-50 p-2.5 rounded-xl border border-slate-100">
+                              {c.notes}
+                            </p>
+                          )}
+                        </CardContent>
+
+                        {/* Card Footer: Detail View vs Admin Edit/Delete */}
+                        <CardFooter className="p-4 bg-slate-50/80 border-t border-slate-100 flex items-center justify-between gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              setSelectedCaseForDetail(c);
+                              setIsDetailModalOpen(true);
+                            }}
+                            className="rounded-xl text-xs font-bold text-slate-700 hover:text-emerald-700 hover:border-emerald-300 flex-1 gap-1"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            <span>عرض التفاصيل السريرية</span>
+                          </Button>
+
+                          {/* ADMIN ONLY CONTROLS */}
+                          {isAdmin && (
+                            <div className="flex items-center gap-1">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => {
+                                  setEditingCase(c);
+                                  setIsEditModalOpen(true);
+                                }}
+                                className="h-8 w-8 p-0 rounded-lg text-blue-600 hover:bg-blue-50 border-blue-200"
+                                title="تعديل الحالة (Admin)"
+                              >
+                                <Edit className="w-3.5 h-3.5" />
+                              </Button>
+
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleDeleteCase(c.id, c.name)}
+                                className="h-8 w-8 p-0 rounded-lg text-red-600 hover:bg-red-50 border-red-200"
+                                title="حذف الحالة (Admin)"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </Button>
+                            </div>
+                          )}
+                        </CardFooter>
+                      </Card>
+                    );
+                  })}
                 </div>
               )}
             </div>
+          )}
 
-            {/* Quick Action Button */}
-            <div className="flex flex-wrap sm:flex-nowrap items-center gap-3 w-full lg:w-auto">
-              <Link
-                href="/add-case"
-                className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2.5 px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm shadow-lg shadow-emerald-900/30 hover:shadow-emerald-900/50 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200"
-              >
-                <UserPlus className="w-5 h-5" />
-                <span>إضافة حالة جديدة</span>
-              </Link>
-
-              <Link
-                href="/cases"
-                className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2.5 px-6 py-3 rounded-xl bg-white/10 hover:bg-white/15 text-slate-200 border border-white/15 font-semibold text-sm backdrop-blur-sm transition-all duration-200"
-              >
-                <FolderHeart className="w-5 h-5 text-emerald-400" />
-                <span>سجل الحالات</span>
-              </Link>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* ─────────────────────────────────────────────────────────────
-          MAIN CONTENT CONTAINER
-      ───────────────────────────────────────────────────────────── */}
-      <div className="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 -mt-6 sm:-mt-8 relative z-20 space-y-10">
-        {/* ───────────────────────────────────────────────────────────
-            QUICK STATS CARDS (4 CARDS)
-        ─────────────────────────────────────────────────────────── */}
-        <section aria-label="الإحصائيات السريعة">
-          {isLoading ? (
-            /* Skeleton Loading Grid */
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5">
-              {[1, 2, 3, 4].map((i) => (
-                <div
-                  key={i}
-                  className="rounded-xl border border-slate-200/80 bg-white p-5 shadow-sm animate-pulse flex items-center justify-between"
-                >
-                  <div className="space-y-2.5 flex-1">
-                    <div className="h-4 w-24 bg-slate-200 rounded" />
-                    <div className="h-8 w-16 bg-slate-300 rounded font-bold" />
-                    <div className="h-3 w-28 bg-slate-100 rounded" />
-                  </div>
-                  <div className="w-12 h-12 rounded-xl bg-slate-200" />
+          {/* ══════════════════════════════════════════════
+              SECTION 2: EXERCISES SHOWCASE
+              ══════════════════════════════════════════════ */}
+          {activeMainTab === "exercises" && (
+            <div className="space-y-6">
+              {isLoadingExercises ? (
+                <div className="text-center py-16 space-y-3">
+                  <RefreshCw className="w-8 h-8 text-blue-600 animate-spin mx-auto" />
+                  <p className="text-xs text-slate-500 font-semibold">جاري جلب مكتبة التمارين المعتمدة...</p>
                 </div>
-              ))}
-            </div>
-          ) : (
-            /* Actual Stats Grid */
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5">
-              {/* Stat 1: Total Cases */}
-              <Link href="/cases" className="block group">
-                <Card className="border border-slate-200/80 bg-white hover:border-emerald-300 hover:shadow-md transition-all duration-200 rounded-xl overflow-hidden">
-                  <CardContent className="p-5 flex items-center justify-between">
-                    <div className="space-y-1">
-                      <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                        عدد الحالات
-                      </p>
-                      <p className="text-3xl font-extrabold text-navy-950 group-hover:text-emerald-600 transition-colors">
-                        {stats.casesCount}
-                      </p>
-                      <p className="text-xs text-slate-400">
-                        Total Patients Recorded
-                      </p>
-                    </div>
-                    <div className="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-600 border border-emerald-100 flex items-center justify-center group-hover:bg-emerald-600 group-hover:text-white transition-all duration-200">
-                      <Users className="w-6 h-6" />
-                    </div>
-                  </CardContent>
-                </Card>
-              </Link>
-
-              {/* Stat 2: Today's Appointments */}
-              <Link href="/cases" className="block group">
-                <Card className="border border-slate-200/80 bg-white hover:border-teal-300 hover:shadow-md transition-all duration-200 rounded-xl overflow-hidden">
-                  <CardContent className="p-5 flex items-center justify-between">
-                    <div className="space-y-1">
-                      <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                        المواعيد اليوم
-                      </p>
-                      <p className="text-3xl font-extrabold text-navy-950 group-hover:text-teal-600 transition-colors">
-                        {stats.todayAppointmentsCount}
-                      </p>
-                      <p className="text-xs text-slate-400">
-                        Appointments Today
-                      </p>
-                    </div>
-                    <div className="w-12 h-12 rounded-xl bg-teal-50 text-teal-600 border border-teal-100 flex items-center justify-center group-hover:bg-teal-600 group-hover:text-white transition-all duration-200">
-                      <Calendar className="w-6 h-6" />
-                    </div>
-                  </CardContent>
-                </Card>
-              </Link>
-
-              {/* Stat 3: Exercises Library */}
-              <Link href="/exercises" className="block group">
-                <Card className="border border-slate-200/80 bg-white hover:border-emerald-300 hover:shadow-md transition-all duration-200 rounded-xl overflow-hidden">
-                  <CardContent className="p-5 flex items-center justify-between">
-                    <div className="space-y-1">
-                      <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                        التمارين
-                      </p>
-                      <p className="text-3xl font-extrabold text-navy-950 group-hover:text-emerald-600 transition-colors">
-                        {stats.exercisesCount}
-                      </p>
-                      <p className="text-xs text-slate-400">
-                        Rehab Exercises Library
-                      </p>
-                    </div>
-                    <div className="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-600 border border-emerald-100 flex items-center justify-center group-hover:bg-emerald-600 group-hover:text-white transition-all duration-200">
-                      <Dumbbell className="w-6 h-6" />
-                    </div>
-                  </CardContent>
-                </Card>
-              </Link>
-
-              {/* Stat 4: Protocols */}
-              <Link href="/protocols" className="block group">
-                <Card className="border border-slate-200/80 bg-white hover:border-blue-300 hover:shadow-md transition-all duration-200 rounded-xl overflow-hidden">
-                  <CardContent className="p-5 flex items-center justify-between">
-                    <div className="space-y-1">
-                      <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                        البروتوكولات
-                      </p>
-                      <p className="text-3xl font-extrabold text-navy-950 group-hover:text-blue-600 transition-colors">
-                        {stats.protocolsCount}
-                      </p>
-                      <p className="text-xs text-slate-400">
-                        Clinical Rehab Protocols
-                      </p>
-                    </div>
-                    <div className="w-12 h-12 rounded-xl bg-blue-50 text-blue-600 border border-blue-100 flex items-center justify-center group-hover:bg-blue-600 group-hover:text-white transition-all duration-200">
-                      <FileHeart className="w-6 h-6" />
-                    </div>
-                  </CardContent>
-                </Card>
-              </Link>
-            </div>
-          )}
-
-          {/* Fallback indicator if error occurs */}
-          {hasError && (
-            <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 text-xs flex items-center justify-between">
-              <span>
-                تعذر تحديث بعض الإحصائيات مؤقتاً من الخادم. يمكنك المحاولة مجدداً.
-              </span>
-              <button
-                onClick={fetchStats}
-                className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-200 hover:bg-amber-300 text-amber-900 rounded-lg font-medium transition-colors"
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-                <span>إعادة المحاولة</span>
-              </button>
-            </div>
-          )}
-        </section>
-
-        {/* ───────────────────────────────────────────────────────────
-            MODULE QUICK-ACCESS GRID (9 MODULES)
-        ─────────────────────────────────────────────────────────── */}
-        <section className="space-y-6" aria-label="وحدات النظام">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200 pb-4">
-            <div>
-              <h2 className="text-xl sm:text-2xl font-bold text-navy-950 flex items-center gap-2">
-                <span>وحدات النظام والخدمات السريرية</span>
-                <span className="text-xs font-normal text-slate-400">
-                  (9 Modules)
-                </span>
-              </h2>
-              <p className="text-sm text-slate-500">
-                وصول سريع إلى أدوات التقييم، البرامج التأهيلية، والأدلة الطبية
-              </p>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <Badge variant="outline" className="bg-white text-slate-600">
-                <Sparkles className="w-3 h-3 text-emerald-500 ml-1" />
-                جاهز للعمل السريري
-              </Badge>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 sm:gap-6">
-            {MODULES.map((module) => {
-              const Icon = module.icon;
-              return (
-                <Link
-                  key={module.id}
-                  href={module.href}
-                  className="group block focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 rounded-xl"
-                >
-                  <Card className="h-full border border-slate-200/90 bg-white hover:border-emerald-300 hover:shadow-xl hover:-translate-y-1 transition-all duration-300 rounded-xl overflow-hidden animate-fade-in flex flex-col justify-between">
-                    <div>
-                      <CardHeader className="p-6 pb-4">
-                        <div className="flex items-start justify-between gap-4">
-                          {/* Gradient Icon Container */}
-                          <div
-                            className={cn(
-                              "w-14 h-14 rounded-2xl bg-gradient-to-br flex items-center justify-center text-white shadow-md shadow-slate-200 group-hover:scale-105 group-hover:shadow-lg transition-all duration-300",
-                              module.gradient
-                            )}
-                          >
-                            <Icon className="w-7 h-7 stroke-[1.8]" />
-                          </div>
-
-                          {/* Badge */}
-                          <Badge
-                            variant={module.badgeVariant || "secondary"}
-                            className="text-xs"
-                          >
-                            {module.badgeText}
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {filteredExercises.map((ex) => (
+                    <Card
+                      key={ex.id}
+                      className="rounded-3xl border-slate-200 shadow-sm hover:shadow-lg transition-all duration-300 bg-white overflow-hidden flex flex-col justify-between group"
+                    >
+                      <CardHeader className="p-5 pb-3">
+                        <div className="flex items-center justify-between gap-2 mb-2">
+                          <Badge variant="outline" className="text-[10px] font-bold">
+                            {ex.region === "LOWER" ? "الطرف السفلي" : ex.region === "UPPER" ? "الطرف العلوي" : "الجذع والعمود الفقري"}
                           </Badge>
+
+                          {ex.isIsometric && (
+                            <Badge className="bg-amber-50 text-amber-800 border-amber-200 text-[10px] font-bold">
+                              انقباض ثابت {ex.isometricAngle ? `${ex.isometricAngle}°` : ""}
+                            </Badge>
+                          )}
                         </div>
 
-                        {/* Title and Subtitle */}
-                        <div className="mt-4 space-y-0.5">
-                          <CardTitle className="text-xl font-bold text-navy-950 group-hover:text-emerald-600 transition-colors flex items-center justify-between">
-                            <span>{module.titleAr}</span>
-                            <ArrowLeft className="w-4 h-4 text-slate-300 group-hover:text-emerald-500 group-hover:-translate-x-1 transition-all" />
-                          </CardTitle>
-                          <CardDescription className="text-xs font-semibold text-emerald-700/80 tracking-wide font-sans">
-                            {module.titleEn}
-                          </CardDescription>
-                        </div>
+                        <CardTitle className="text-base font-bold text-slate-900 group-hover:text-blue-600 transition-colors">
+                          {ex.nameAr}
+                        </CardTitle>
+                        <CardDescription className="text-xs font-mono text-slate-500">
+                          {ex.nameEn}
+                        </CardDescription>
                       </CardHeader>
 
-                      <CardContent className="px-6 pb-6 pt-0">
-                        <p className="text-sm text-slate-600 leading-relaxed line-clamp-3">
-                          {module.descriptionAr}
+                      <CardContent className="px-5 pb-4 space-y-2 text-xs text-slate-600">
+                        <p className="text-[11px] text-slate-500 line-clamp-2">
+                          {ex.instructions || "تمرين معتمد في بروتوكولات التأهيل الحركي والتقوية السريرية."}
                         </p>
                       </CardContent>
-                    </div>
 
-                    {/* Bottom subtle bar */}
-                    <div className="px-6 py-3 bg-slate-50/70 border-t border-slate-100 flex items-center justify-between text-xs font-medium text-slate-500 group-hover:text-emerald-700 transition-colors">
-                      <span>فتح الوحدة</span>
-                      <span className="font-sans font-bold group-hover:underline">
-                        {module.href}
-                      </span>
-                    </div>
-                  </Card>
-                </Link>
-              );
-            })}
-          </div>
-        </section>
+                      <CardFooter className="p-4 bg-slate-50/80 border-t border-slate-100 flex items-center justify-between gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            setSelectedExercise(ex);
+                            setIsExerciseDetailOpen(true);
+                          }}
+                          className="rounded-xl text-xs font-bold text-slate-700 hover:text-blue-700 hover:border-blue-300 flex-1 gap-1"
+                        >
+                          <Play className="w-3.5 h-3.5" />
+                          <span>طريقة الأداء والفيديو</span>
+                        </Button>
 
-        {/* ───────────────────────────────────────────────────────────
-            CLINICAL HIGHLIGHTS / EVIDENCE-BASED PRINCIPLES
-        ─────────────────────────────────────────────────────────── */}
-        <section
-          className="rounded-2xl border border-slate-200 bg-white p-6 sm:p-8 shadow-sm space-y-6"
-          aria-label="مبادئ التأهيل السريري"
-        >
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center">
-                <Stethoscope className="w-5 h-5" />
-              </div>
-              <div>
-                <h3 className="text-lg font-bold text-navy-950">
-                  منهجية التأهيل السريري في Revive
-                </h3>
-                <p className="text-xs text-slate-500">
-                  Clinical Rehabilitation Framework & Evidence-Based Practice
-                </p>
-              </div>
+                        {/* Admin delete exercise button */}
+                        {isAdmin && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              if (confirm("هل تريد حذف هذا التمرين؟")) {
+                                setExercises(exercises.filter((item) => item.id !== ex.id));
+                              }
+                            }}
+                            className="h-8 w-8 p-0 rounded-lg text-red-500 hover:bg-red-50"
+                            title="حذف التمرين"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </Button>
+                        )}
+                      </CardFooter>
+                    </Card>
+                  ))}
+                </div>
+              )}
             </div>
+          )}
 
-            <div className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping" />
-              <span className="text-xs font-semibold text-emerald-700">
-                النظام جاهز ومُحدث
-              </span>
-            </div>
-          </div>
+        </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="flex items-start gap-3 p-4 rounded-xl bg-slate-50 border border-slate-100">
-              <div className="p-2 rounded-lg bg-emerald-100/80 text-emerald-700 shrink-0 mt-0.5">
-                <TrendingUp className="w-5 h-5" />
-              </div>
-              <div className="space-y-1">
-                <h4 className="text-sm font-bold text-navy-950">
-                  تقييم موضوعي مستمر (ROM & Girth)
-                </h4>
-                <p className="text-xs text-slate-600 leading-relaxed">
-                  قياس المدى الحركي بالدرجات ومحيط العضلات بالسنتيمتر مقارنة
-                  بالطرف السليم لتوثيق التحسن بدقة بالأرقام.
-                </p>
-              </div>
-            </div>
+        {/* ── MODAL: READ-ONLY CASE DETAIL VIEW ── */}
+        <Dialog open={isDetailModalOpen} onOpenChange={setIsDetailModalOpen}>
+          <DialogContent className="max-w-2xl rounded-3xl bg-white p-6 max-h-[85vh] overflow-y-auto">
+            {selectedCaseForDetail && (
+              <div className="space-y-6 text-start">
+                <DialogHeader className="text-start border-b border-slate-100 pb-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <Badge className="bg-emerald-50 text-emerald-800 border-emerald-200 text-xs font-bold">
+                      {getPhaseLabel(selectedCaseForDetail.rehabPrograms?.[0]?.phase || "ACUTE").ar}
+                    </Badge>
+                    <span className="text-xs text-slate-400">
+                      {selectedCaseForDetail.injuredSide === "RIGHT" ? "الطرف الأيمن" : "الطرف الأيسر"}
+                    </span>
+                  </div>
+                  <DialogTitle className="text-xl font-black text-slate-900 mt-2">
+                    {selectedCaseForDetail.name}
+                  </DialogTitle>
+                  <DialogDescription className="text-xs text-emerald-700 font-bold">
+                    نوع الإصابة: {selectedCaseForDetail.injuryType}
+                  </DialogDescription>
+                </DialogHeader>
 
-            <div className="flex items-start gap-3 p-4 rounded-xl bg-slate-50 border border-slate-100">
-              <div className="p-2 rounded-lg bg-blue-100/80 text-blue-700 shrink-0 mt-0.5">
-                <ShieldCheck className="w-5 h-5" />
-              </div>
-              <div className="space-y-1">
-                <h4 className="text-sm font-bold text-navy-950">
-                  بروتوكولات مرحلية بمؤشرات أمان
-                </h4>
-                <p className="text-xs text-slate-600 leading-relaxed">
-                  تدرج مرحلي من التمارين الساكنة (Isometrics) إلى الوظيفية مع
-                  مراعاة الرايات الحمراء (Red Flags) لتفادي الانتكاس.
-                </p>
-              </div>
-            </div>
+                <div className="space-y-4 text-xs text-slate-700">
+                  <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 space-y-2">
+                    <h4 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                      <Info className="w-4 h-4 text-emerald-600" />
+                      <span>تفاصيل البرنامج التأهيلي النشط:</span>
+                    </h4>
+                    <p className="text-slate-600 text-xs leading-relaxed">
+                      {selectedCaseForDetail.notes || "يتم تطبيق بروتوكول التقوية واستعادة المدى الحركي وفقاً لمعايير Revive السريرية."}
+                    </p>
+                  </div>
 
-            <div className="flex items-start gap-3 p-4 rounded-xl bg-slate-50 border border-slate-100">
-              <div className="p-2 rounded-lg bg-teal-100/80 text-teal-700 shrink-0 mt-0.5">
-                <CheckCircle2 className="w-5 h-5" />
+                  <div className="p-4 rounded-2xl bg-emerald-50/60 border border-emerald-100 space-y-2">
+                    <h4 className="font-bold text-emerald-900 text-xs">
+                      إجراءات المتابعة:
+                    </h4>
+                    <p className="text-[11px] text-emerald-800">
+                      يمكنك حجز جلسة استشارة أونلاين أو التواصل المباشر مع الطبيب عبر الواتساب للاستفسار عن هذه الحالة.
+                    </p>
+                  </div>
+                </div>
+
+                <DialogFooter className="pt-4 border-t border-slate-100 flex items-center justify-between">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setIsDetailModalOpen(false)}
+                    className="rounded-xl"
+                  >
+                    إغلاق
+                  </Button>
+
+                  <a
+                    href={`https://wa.me/201275829322?text=${encodeURIComponent(`مرحباً دكتور، أود الاستفسار بخصوص الحالة: ${selectedCaseForDetail.name} (${selectedCaseForDetail.injuryType})`)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 text-white font-bold text-xs shadow-md"
+                  >
+                    <MessageCircle className="w-3.5 h-3.5" />
+                    <span>تواصل بخصوص الحالة عبر واتساب</span>
+                  </a>
+                </DialogFooter>
               </div>
-              <div className="space-y-1">
-                <h4 className="text-sm font-bold text-navy-950">
-                  معايير موضوعية للنزول (RTP Criteria)
-                </h4>
-                <p className="text-xs text-slate-600 leading-relaxed">
-                  اختبارات القوة والقفز ومؤشر التماثل الطرفي (LSI ≥ 90%) لضمان
-                  الأمان التام قبل السماح بالعودة للمنافسة.
-                </p>
+            )}
+          </DialogContent>
+        </Dialog>
+
+        {/* ── MODAL: ADMIN EDIT CASE ── */}
+        <Dialog open={isEditModalOpen} onOpenChange={setIsEditModalOpen}>
+          <DialogContent className="max-w-md rounded-3xl bg-white p-6">
+            <DialogHeader className="text-start">
+              <DialogTitle className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                <Edit className="w-4 h-4 text-emerald-600" />
+                <span>تعديل بيانات الحالة السريرية (Admin)</span>
+              </DialogTitle>
+              <DialogDescription className="text-xs text-slate-500">
+                تحديث اسم المريض أو نوع الإصابة أو الملاحظات
+              </DialogDescription>
+            </DialogHeader>
+
+            {editingCase && (
+              <form onSubmit={handleUpdateCase} className="space-y-4 py-2">
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold">اسم المريض</Label>
+                  <Input
+                    required
+                    value={editingCase.name}
+                    onChange={(e) => setEditingCase({ ...editingCase, name: e.target.value })}
+                    className="rounded-xl"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold">نوع الإصابة</Label>
+                  <Input
+                    required
+                    value={editingCase.injuryType}
+                    onChange={(e) => setEditingCase({ ...editingCase, injuryType: e.target.value })}
+                    className="rounded-xl"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold">رقم الهاتف</Label>
+                  <Input
+                    value={editingCase.phone || ""}
+                    onChange={(e) => setEditingCase({ ...editingCase, phone: e.target.value })}
+                    className="rounded-xl font-mono text-end"
+                    dir="ltr"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold">الملاحظات السريرية</Label>
+                  <Textarea
+                    rows={3}
+                    value={editingCase.notes || ""}
+                    onChange={(e) => setEditingCase({ ...editingCase, notes: e.target.value })}
+                    className="rounded-xl resize-none"
+                  />
+                </div>
+
+                <DialogFooter className="gap-2 pt-4">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setIsEditModalOpen(false)}
+                    className="rounded-xl"
+                  >
+                    إلغاء
+                  </Button>
+                  <Button
+                    type="submit"
+                    disabled={isSavingCase}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl"
+                  >
+                    {isSavingCase ? "جاري الحفظ..." : "حفظ التعديل"}
+                  </Button>
+                </DialogFooter>
+              </form>
+            )}
+          </DialogContent>
+        </Dialog>
+
+        {/* ── MODAL: ADMIN ADD NEW CASE ── */}
+        <Dialog open={isAddCaseModalOpen} onOpenChange={setIsAddCaseModalOpen}>
+          <DialogContent className="max-w-md rounded-3xl bg-white p-6">
+            <DialogHeader className="text-start">
+              <DialogTitle className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                <UserPlus className="w-4 h-4 text-emerald-600" />
+                <span>إضافة حالة مريض جديدة (Admin)</span>
+              </DialogTitle>
+              <DialogDescription className="text-xs text-slate-500">
+                تسجيل حالة سريرية جديدة وإدراجها في المنظومة الحية
+              </DialogDescription>
+            </DialogHeader>
+
+            <form onSubmit={handleCreateCase} className="space-y-4 py-2">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold">اسم المريض الكامل *</Label>
+                <Input
+                  required
+                  placeholder="مثال: كابتن محمد عبد الرحمن"
+                  value={newCaseForm.name}
+                  onChange={(e) => setNewCaseForm({ ...newCaseForm, name: e.target.value })}
+                  className="rounded-xl"
+                />
               </div>
-            </div>
-          </div>
-        </section>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold">نوع الإصابة السريرية *</Label>
+                <Input
+                  required
+                  placeholder="مثال: ACL + Meniscus Repair"
+                  value={newCaseForm.injuryType}
+                  onChange={(e) => setNewCaseForm({ ...newCaseForm, injuryType: e.target.value })}
+                  className="rounded-xl"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold">الجانب المصاب</Label>
+                  <select
+                    value={newCaseForm.injuredSide}
+                    onChange={(e) => setNewCaseForm({ ...newCaseForm, injuredSide: e.target.value as any })}
+                    className="w-full h-10 px-3 py-2 rounded-xl border border-slate-200 text-xs bg-white"
+                  >
+                    <option value="RIGHT">أيمن (Right)</option>
+                    <option value="LEFT">أيسر (Left)</option>
+                    <option value="BILATERAL">الطرفين (Bilateral)</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold">المرحلة التأهيلية</Label>
+                  <select
+                    value={newCaseForm.rehabPhase}
+                    onChange={(e) => setNewCaseForm({ ...newCaseForm, rehabPhase: e.target.value })}
+                    className="w-full h-10 px-3 py-2 rounded-xl border border-slate-200 text-xs bg-white"
+                  >
+                    <option value="ACUTE">الحادة (Acute)</option>
+                    <option value="RESTORE_ROM">استعادة المدى الحركي (ROM)</option>
+                    <option value="STRENGTH">التقوية العضلية (Strength)</option>
+                    <option value="FUNCTIONAL">الوظيفية (Functional)</option>
+                    <option value="RETURN_TO_SPORT">العودة للملعب (RTP)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold">رقم الهاتف / الواتساب</Label>
+                <Input
+                  placeholder="01XXXXXXXXX"
+                  value={newCaseForm.phone}
+                  onChange={(e) => setNewCaseForm({ ...newCaseForm, phone: e.target.value })}
+                  className="rounded-xl font-mono text-end"
+                  dir="ltr"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold">ملاحظات الطبيب المعالج</Label>
+                <Textarea
+                  rows={3}
+                  placeholder="تاريخ الإصابة، توصيات الجراح، قياسات العجز المبدئية..."
+                  value={newCaseForm.notes}
+                  onChange={(e) => setNewCaseForm({ ...newCaseForm, notes: e.target.value })}
+                  className="rounded-xl resize-none"
+                />
+              </div>
+
+              <DialogFooter className="gap-2 pt-4">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setIsAddCaseModalOpen(false)}
+                  className="rounded-xl"
+                >
+                  إلغاء
+                </Button>
+                <Button
+                  type="submit"
+                  disabled={isSavingCase}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl"
+                >
+                  {isSavingCase ? "جاري الحفظ..." : "إضافة الحالة للمنظومة"}
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
+
+        {/* ── MODAL: EXERCISE DETAIL & VIDEO ── */}
+        <Dialog open={isExerciseDetailOpen} onOpenChange={setIsExerciseDetailOpen}>
+          <DialogContent className="max-w-md rounded-3xl bg-white p-6">
+            {selectedExercise && (
+              <div className="space-y-5 text-start">
+                <DialogHeader className="text-start border-b border-slate-100 pb-3">
+                  <div className="flex items-center gap-2 mb-1">
+                    <Badge variant="outline" className="text-[10px]">
+                      {selectedExercise.region}
+                    </Badge>
+                    {selectedExercise.isIsometric && (
+                      <Badge className="bg-amber-50 text-amber-800 border-amber-200 text-[10px]">
+                        زاوية {selectedExercise.isometricAngle}°
+                      </Badge>
+                    )}
+                  </div>
+                  <DialogTitle className="text-lg font-bold text-slate-900">
+                    {selectedExercise.nameAr}
+                  </DialogTitle>
+                  <DialogDescription className="text-xs font-mono text-slate-500">
+                    {selectedExercise.nameEn}
+                  </DialogDescription>
+                </DialogHeader>
+
+                <div className="space-y-3 text-xs text-slate-600">
+                  <h4 className="font-bold text-slate-900 text-xs">تعليمات الأداء السريري:</h4>
+                  <p className="bg-slate-50 p-3.5 rounded-2xl border border-slate-100 leading-relaxed text-slate-700">
+                    {selectedExercise.instructions || "الحفاظ على استقامة العمود الفقري والتركيز على الانقباض العضلي المستهدف."}
+                  </p>
+                </div>
+
+                <DialogFooter className="pt-4 border-t border-slate-100 flex items-center justify-between">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setIsExerciseDetailOpen(false)}
+                    className="rounded-xl"
+                  >
+                    إغلاق
+                  </Button>
+
+                  <a
+                    href={`https://www.youtube.com/results?search_query=${encodeURIComponent(selectedExercise.youtubeSearch || selectedExercise.nameEn)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-red-600 text-white font-bold text-xs shadow-md shadow-red-600/20"
+                  >
+                    <Play className="w-3.5 h-3.5" />
+                    <span>مشاهدة فيديو الأداء على YouTube</span>
+                  </a>
+                </DialogFooter>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
+
+        {/* ── MODAL: ADMIN ADD EXERCISE ── */}
+        <Dialog open={isAddExerciseModalOpen} onOpenChange={setIsAddExerciseModalOpen}>
+          <DialogContent className="max-w-md rounded-3xl bg-white p-6">
+            <DialogHeader className="text-start">
+              <DialogTitle className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                <Dumbbell className="w-4 h-4 text-blue-600" />
+                <span>إضافة تمرين سريري جديد (Admin)</span>
+              </DialogTitle>
+              <DialogDescription className="text-xs text-slate-500">
+                إضافة تمرين إلى دليل التمارين المعتمدة
+              </DialogDescription>
+            </DialogHeader>
+
+            <form onSubmit={handleCreateExercise} className="space-y-4 py-2">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold">اسم التمرين بالعربية *</Label>
+                <Input
+                  required
+                  placeholder="مثال: سكوات أحادي على منصة مائلة"
+                  value={newExerciseForm.nameAr}
+                  onChange={(e) => setNewExerciseForm({ ...newExerciseForm, nameAr: e.target.value })}
+                  className="rounded-xl"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold">الاسم بالإنجليزي</Label>
+                <Input
+                  placeholder="مثال: Decline Single Leg Squat"
+                  value={newExerciseForm.nameEn}
+                  onChange={(e) => setNewExerciseForm({ ...newExerciseForm, nameEn: e.target.value })}
+                  className="rounded-xl font-sans"
+                  dir="ltr"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold">المنطقة</Label>
+                  <select
+                    value={newExerciseForm.region}
+                    onChange={(e) => setNewExerciseForm({ ...newExerciseForm, region: e.target.value as any })}
+                    className="w-full h-10 px-3 py-2 rounded-xl border border-slate-200 text-xs bg-white"
+                  >
+                    <option value="LOWER">الطرف السفلي</option>
+                    <option value="UPPER">الطرف العلوي</option>
+                    <option value="CORE">الجذع والعمود الفقري</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold">الفئة العضلية</Label>
+                  <Input
+                    placeholder="Quadriceps, Hamstrings..."
+                    value={newExerciseForm.category}
+                    onChange={(e) => setNewExerciseForm({ ...newExerciseForm, category: e.target.value })}
+                    className="rounded-xl text-xs"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold">تعليمات الأداء</Label>
+                <Textarea
+                  rows={3}
+                  placeholder="عدد المجموعات والتكرارات وزمن الراحة..."
+                  value={newExerciseForm.instructions}
+                  onChange={(e) => setNewExerciseForm({ ...newExerciseForm, instructions: e.target.value })}
+                  className="rounded-xl resize-none"
+                />
+              </div>
+
+              <DialogFooter className="gap-2 pt-4">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setIsAddExerciseModalOpen(false)}
+                  className="rounded-xl"
+                >
+                  إلغاء
+                </Button>
+                <Button
+                  type="submit"
+                  className="bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl"
+                >
+                  حفظ التمرين
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
+
       </div>
     </div>
   );
