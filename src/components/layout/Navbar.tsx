@@ -21,11 +21,13 @@ import {
   LogIn,
   LogOut,
   User,
+  Eye,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useAuth } from "@/lib/auth-context";
+import { useAuth, ADMIN_EMAIL } from "@/lib/auth-context";
 
-const navItems = [
+// Admin-only navigation items
+const adminNavItems = [
   { label: "إضافة حالة", labelEn: "Add Case", href: "/add-case", icon: UserPlus },
   { label: "الحالات", labelEn: "Cases", href: "/cases", icon: FolderHeart },
   { label: "التمارين", labelEn: "Exercises", href: "/exercises", icon: Dumbbell },
@@ -38,10 +40,22 @@ const navItems = [
   { label: "تواصل معنا", labelEn: "Contact", href: "/contact", icon: PhoneCall },
 ];
 
+// Client-only navigation items (clean, view-only, focused)
+const clientNavItems = [
+  { label: "الرئيسية (الحالات والتمارين)", labelEn: "Cases & Exercises", href: "/", icon: FolderHeart },
+  { label: "بروتوكولات الإصابات", labelEn: "Protocols", href: "/protocols", icon: FileHeart },
+  { label: "الأبحاث والمقالات", labelEn: "Research", href: "/research", icon: Search },
+  { label: "شروط النزول للملعب", labelEn: "RTP", href: "/return-to-play", icon: CheckCircle2 },
+  { label: "المتابعة أونلاين", labelEn: "Online", href: "/online-followup", icon: Video },
+  { label: "تواصل معنا", labelEn: "Contact", href: "/contact", icon: PhoneCall },
+];
+
 export function Navbar() {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
   const { user, isAdmin, logout } = useAuth();
+
+  const currentNavItems = isAdmin ? adminNavItems : clientNavItems;
 
   return (
     <>
@@ -65,9 +79,9 @@ export function Navbar() {
               </div>
             </Link>
 
-            {/* Center: Desktop Nav Items */}
+            {/* Center: Desktop Nav Items (Dynamic for Admin vs Client) */}
             <div className="hidden xl:flex items-center gap-1">
-              {navItems.map((item) => {
+              {currentNavItems.map((item) => {
                 const Icon = item.icon;
                 const isActive =
                   pathname === item.href ||
@@ -92,26 +106,40 @@ export function Navbar() {
 
             {/* Left Side: Auth & Admin Buttons */}
             <div className="hidden sm:flex items-center gap-2">
+              {/* If Admin, show Master Admin Portal button */}
               {isAdmin && (
                 <Link
                   href="/admin"
                   className={cn(
-                    "flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all border",
+                    "flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all border shadow-sm",
                     pathname === "/admin"
-                      ? "bg-amber-400 text-slate-900 border-amber-300 shadow-md"
-                      : "bg-amber-400/10 text-amber-300 border-amber-400/30 hover:bg-amber-400/20"
+                      ? "bg-amber-400 text-slate-900 border-amber-300 shadow-amber-400/20"
+                      : "bg-amber-400/15 text-amber-300 border-amber-400/30 hover:bg-amber-400/25"
                   )}
                 >
                   <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
-                  <span>لوحة الإدارة</span>
+                  <span>لوحة الإدارة (Admin)</span>
                 </Link>
               )}
 
               {user ? (
                 <div className="flex items-center gap-2">
-                  <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-white/10 text-slate-200 text-xs border border-white/10">
-                    <User className="w-3.5 h-3.5 text-emerald-400" />
-                    <span className="max-w-[100px] truncate">{user.name}</span>
+                  <div
+                    className={cn(
+                      "flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs border font-medium",
+                      isAdmin
+                        ? "bg-amber-950/40 border-amber-500/30 text-amber-200"
+                        : "bg-white/10 border-white/10 text-slate-200"
+                    )}
+                  >
+                    {isAdmin ? (
+                      <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
+                    ) : (
+                      <Eye className="w-3.5 h-3.5 text-teal-400" />
+                    )}
+                    <span className="max-w-[120px] truncate">
+                      {isAdmin ? "كابتن يوسف (Admin)" : user.name || "عميل (عرض فقط)"}
+                    </span>
                   </div>
                   <button
                     onClick={logout}
@@ -161,67 +189,50 @@ export function Navbar() {
       {mobileOpen && (
         <div className="fixed inset-0 z-40 xl:hidden">
           <div
-            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm"
             onClick={() => setMobileOpen(false)}
           />
-          <div className="absolute top-16 right-0 w-80 h-[calc(100vh-4rem)] bg-navy-950 border-l border-white/10 shadow-2xl overflow-y-auto">
-            <div className="p-4 space-y-2">
+          <div className="fixed top-16 right-0 bottom-0 w-72 bg-navy-950 border-l border-white/10 p-4 overflow-y-auto shadow-2xl">
 
-              {/* Mobile Auth Status */}
-              <div className="p-3 mb-2 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-between">
-                {user ? (
-                  <>
-                    <div className="flex items-center gap-2">
-                      <div className="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-xs">
-                        {user.name.charAt(0)}
-                      </div>
-                      <div>
-                        <span className="block text-xs font-bold text-white">{user.name}</span>
-                        <span className="block text-[10px] text-emerald-400">{user.role}</span>
+            {/* User status in mobile */}
+            <div className="mb-4 pb-3 border-b border-white/10">
+              {user ? (
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-xs">
+                      {isAdmin ? "AD" : "CL"}
+                    </div>
+                    <div>
+                      <div className="text-white text-xs font-bold">{user.name}</div>
+                      <div className="text-[10px] text-slate-400">
+                        {isAdmin ? ADMIN_EMAIL : "واجهة العميل (عرض فقط)"}
                       </div>
                     </div>
-                    <button
-                      onClick={logout}
-                      className="text-xs text-red-400 hover:underline flex items-center gap-1"
-                    >
-                      <LogOut className="w-3.5 h-3.5" />
-                      <span>خروج</span>
-                    </button>
-                  </>
-                ) : (
-                  <Link
-                    href="/login"
-                    onClick={() => setMobileOpen(false)}
-                    className="w-full py-2 rounded-xl bg-emerald-600 text-white text-center text-xs font-bold flex items-center justify-center gap-2"
+                  </div>
+                  <button
+                    onClick={() => {
+                      logout();
+                      setMobileOpen(false);
+                    }}
+                    className="p-1.5 text-rose-400 hover:bg-white/5 rounded-lg"
                   >
-                    <LogIn className="w-4 h-4" />
-                    <span>تسجيل الدخول إلى Revive</span>
-                  </Link>
-                )}
-              </div>
-
-              {/* Admin Portal Link (Mobile) */}
-              <Link
-                href="/admin"
-                onClick={() => setMobileOpen(false)}
-                className={cn(
-                  "flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all border",
-                  isAdmin
-                    ? "bg-amber-400/10 text-amber-300 border-amber-400/40"
-                    : "bg-white/5 text-slate-300 border-white/10"
-                )}
-              >
-                <ShieldCheck className="w-4 h-4 text-amber-400" />
-                <div>
-                  <span className="block">لوحة تحكم المدير العام (Admin)</span>
-                  <span className="block text-[10px] text-slate-400">تعديل محتويات الموقع والمرضى</span>
+                    <LogOut className="w-4 h-4" />
+                  </button>
                 </div>
-              </Link>
+              ) : (
+                <Link
+                  href="/login"
+                  onClick={() => setMobileOpen(false)}
+                  className="w-full flex items-center justify-center gap-2 py-2 rounded-xl bg-emerald-600 text-white font-bold text-xs"
+                >
+                  <LogIn className="w-4 h-4" />
+                  <span>تسجيل الدخول</span>
+                </Link>
+              )}
+            </div>
 
-              <div className="border-t border-white/10 my-2" />
-
-              {/* Navigation Items */}
-              {navItems.map((item) => {
+            <div className="flex flex-col gap-1">
+              {currentNavItems.map((item) => {
                 const Icon = item.icon;
                 const isActive =
                   pathname === item.href ||
@@ -232,22 +243,28 @@ export function Navbar() {
                     href={item.href}
                     onClick={() => setMobileOpen(false)}
                     className={cn(
-                      "flex items-center gap-3 px-4 py-2.5 rounded-xl text-xs font-medium transition-all duration-200",
+                      "flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors",
                       isActive
                         ? "bg-emerald-500/20 text-emerald-400 font-bold"
-                        : "text-slate-300 hover:text-white hover:bg-white/10"
+                        : "text-slate-300 hover:text-white hover:bg-white/5"
                     )}
                   >
                     <Icon className="w-4 h-4" />
-                    <div>
-                      <span className="block">{item.label}</span>
-                      <span className="block text-[10px] text-slate-500">
-                        {item.labelEn}
-                      </span>
-                    </div>
+                    <span>{item.label}</span>
                   </Link>
                 );
               })}
+
+              {isAdmin && (
+                <Link
+                  href="/admin"
+                  onClick={() => setMobileOpen(false)}
+                  className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-bold text-amber-300 bg-amber-400/10 border border-amber-400/20 mt-2"
+                >
+                  <ShieldCheck className="w-4 h-4 text-amber-400" />
+                  <span>لوحة الإدارة المركزية</span>
+                </Link>
+              )}
             </div>
           </div>
         </div>

@@ -38,7 +38,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
-import { useAuth } from "@/lib/auth-context";
+import { useAuth, ADMIN_EMAIL } from "@/lib/auth-context";
 
 interface PatientItem {
   id: string;
@@ -163,40 +163,43 @@ export default function AdminPage() {
     }
   };
 
-  // If not logged in as Admin, show quick unlock gate
+  // If not logged in as Admin, show clean access gate
   if (!isAdmin) {
     return (
       <div className="min-h-screen bg-slate-900 py-16 px-4 flex items-center justify-center">
         <Card className="max-w-md w-full rounded-3xl bg-white p-8 text-center space-y-6 shadow-2xl">
           <div className="w-16 h-16 mx-auto rounded-3xl bg-amber-100 text-amber-600 flex items-center justify-center shadow-inner">
-            <Lock className="w-8 h-8" />
+            <ShieldCheck className="w-8 h-8" />
           </div>
 
           <div className="space-y-2">
             <h2 className="text-2xl font-black text-slate-900">
-              منطقة مقيدة — تتطلب صلاحيات المدير العام
+              واجهة مخصصة لمدير النظام
             </h2>
             <p className="text-xs text-slate-500 leading-relaxed">
-              هذه الصفحة مخصصة لمدير منصة <strong>Revive</strong> لتعديل جميع بيانات الموقع، المرضى، والبروتوكولات.
+              هذه اللوحة خاصة بمدير منصة <strong>Revive</strong> لتعديل جميع بيانات الموقع والحالات والتمارين.
             </p>
+            <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-xs font-mono text-amber-900 text-center">
+              {ADMIN_EMAIL}
+            </div>
           </div>
 
           <div className="pt-2 space-y-3">
             <Button
               onClick={() => {
-                loginAsAdmin("revive2026");
+                loginAsAdmin();
               }}
-              className="w-full h-12 rounded-xl bg-navy-950 hover:bg-slate-900 text-white font-bold gap-2 text-sm shadow-md"
+              className="w-full h-12 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 font-black gap-2 text-sm shadow-md"
             >
-              <ShieldCheck className="w-4 h-4 text-amber-400" />
-              <span>تأكيد الصلاحية والدخول كـ Admin (1-Click)</span>
+              <ShieldCheck className="w-4 h-4" />
+              <span>دخول فوري كمدير النظام (Admin)</span>
             </Button>
 
             <Link
-              href="/login"
+              href="/"
               className="block text-xs font-semibold text-slate-500 hover:text-slate-800 transition-colors"
             >
-              الذهاب لصفحة تسجيل الدخول العادية
+              العودة للرئيسية (واجهة العميل)
             </Link>
           </div>
         </Card>

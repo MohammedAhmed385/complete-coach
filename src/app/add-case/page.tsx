@@ -3,6 +3,8 @@
 import * as React from "react";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { useAuth, ADMIN_EMAIL } from "@/lib/auth-context";
 import {
   User,
   Activity,
@@ -286,6 +288,7 @@ const REHAB_PHASES_DATA = [
 
 export default function AddCasePage() {
   const router = useRouter();
+  const { user, isAdmin, loginAsAdmin } = useAuth();
 
   // Active tab state
   const [activeTab, setActiveTab] = useState<string>("patient-info");
@@ -295,6 +298,48 @@ export default function AddCasePage() {
 
   // Today's ISO date string (YYYY-MM-DD)
   const todayStr = new Date().toISOString().split("T")[0];
+
+  if (!isAdmin) {
+    return (
+      <div className="min-h-screen bg-slate-900 py-16 px-4 flex items-center justify-center">
+        <Card className="max-w-md w-full rounded-3xl bg-white p-8 text-center space-y-6 shadow-2xl">
+          <div className="w-16 h-16 mx-auto rounded-3xl bg-amber-100 text-amber-600 flex items-center justify-center shadow-inner">
+            <Stethoscope className="w-8 h-8" />
+          </div>
+
+          <div className="space-y-2">
+            <h2 className="text-2xl font-black text-slate-900">
+              واجهة مخصصة لمدير النظام (Admin)
+            </h2>
+            <p className="text-xs text-slate-500 leading-relaxed">
+              إضافة الحالات السريرية مقتصرة على مدير النظام. يمكن للعملاء والزوار استعراض الحالات والتفاصيل من الصفحة الرئيسية.
+            </p>
+            <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-xs font-mono text-amber-900 text-center">
+              {ADMIN_EMAIL}
+            </div>
+          </div>
+
+          <div className="pt-2 space-y-3">
+            <Button
+              onClick={() => {
+                loginAsAdmin();
+              }}
+              className="w-full h-12 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 font-black gap-2 text-sm shadow-md"
+            >
+              <span>دخول كمدير النظام (Admin)</span>
+            </Button>
+
+            <Link
+              href="/"
+              className="block text-xs font-semibold text-slate-500 hover:text-slate-800 transition-colors"
+            >
+              العودة للرئيسية (واجهة العميل)
+            </Link>
+          </div>
+        </Card>
+      </div>
+    );
+  }
 
   // 1. Patient Info Form State
   const [patientForm, setPatientForm] = useState<PatientFormState>({

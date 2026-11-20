@@ -51,6 +51,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 
 import { cn, getRegionLabel, truncate, generateWhatsAppShareLink } from "@/lib/utils";
+import { useAuth } from "@/lib/auth-context";
 
 // --- TYPES ---
 export type ExerciseRegion = "UPPER" | "LOWER" | "CORE" | "FULL_BODY";
@@ -105,6 +106,8 @@ const COMMON_CATEGORIES = [
 const STANDARD_ISOMETRIC_ANGLES = [0, 30, 45, 60, 90];
 
 export default function ExercisesPage() {
+  const { isAdmin } = useAuth();
+
   // --- STATE: Data ---
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -502,19 +505,21 @@ ${youtubeLink}
               </div>
             </div>
 
-            {/* Top Action Button */}
-            <div className="flex items-center gap-3">
-              <Button
-                onClick={() => {
-                  setAddExerciseError(null);
-                  setIsAddDialogOpen(true);
-                }}
-                className="bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm flex items-center gap-2 h-11 px-5 rounded-lg"
-              >
-                <Plus className="w-5 h-5" />
-                <span className="font-semibold">إضافة تمرين مخصص</span>
-              </Button>
-            </div>
+            {/* Top Action Button (Admin Only) */}
+            {isAdmin && (
+              <div className="flex items-center gap-3">
+                <Button
+                  onClick={() => {
+                    setAddExerciseError(null);
+                    setIsAddDialogOpen(true);
+                  }}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm flex items-center gap-2 h-11 px-5 rounded-lg"
+                >
+                  <Plus className="w-5 h-5" />
+                  <span className="font-semibold">إضافة تمرين مخصص</span>
+                </Button>
+              </div>
+            )}
           </div>
         </div>
       </section>

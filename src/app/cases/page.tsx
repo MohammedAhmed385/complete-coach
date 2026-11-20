@@ -58,6 +58,7 @@ import {
   generateWhatsAppShareLink,
   getPhaseLabel,
 } from "@/lib/utils";
+import { useAuth } from "@/lib/auth-context";
 
 // TypeScript interfaces for Cases and Appointments
 interface PatientItem {
@@ -127,6 +128,8 @@ const RECURRING_DAYS = [
 ];
 
 export default function CasesPage() {
+  const { isAdmin } = useAuth();
+
   // State
   const [patients, setPatients] = useState<PatientItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -386,13 +389,15 @@ export default function CasesPage() {
                 <span>حجز موعد سريع</span>
               </Button>
 
-              {/* Add New Case Link */}
-              <Button asChild className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm">
-                <Link href="/add-case">
-                  <UserPlus className="w-4 h-4" />
-                  <span>إضافة حالة جديدة</span>
-                </Link>
-              </Button>
+              {/* Add New Case Link (Admin Only) */}
+              {isAdmin && (
+                <Button asChild className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm">
+                  <Link href="/add-case">
+                    <UserPlus className="w-4 h-4" />
+                    <span>إضافة حالة جديدة</span>
+                  </Link>
+                </Button>
+              )}
             </div>
           </div>
 
@@ -727,16 +732,18 @@ export default function CasesPage() {
                           <span className="hidden sm:inline">واتساب</span>
                         </Button>
 
-                        {/* Delete Button */}
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => setPatientToDelete(patient)}
-                          className="p-2 h-9 w-9 text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700 hover:border-red-300"
-                          title="حذف ملف المريض"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
+                        {/* Delete Button (Admin Only) */}
+                        {isAdmin && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setPatientToDelete(patient)}
+                            className="p-2 h-9 w-9 text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700 hover:border-red-300"
+                            title="حذف ملف المريض (Admin)"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        )}
                       </CardFooter>
                     </Card>
                   );

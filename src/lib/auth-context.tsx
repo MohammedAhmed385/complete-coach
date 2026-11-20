@@ -3,7 +3,9 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 
-export type Role = "ADMIN" | "PHYSIOTHERAPIST" | "PATIENT";
+export type Role = "ADMIN" | "CLIENT" | "PATIENT" | "PHYSIOTHERAPIST";
+
+export const ADMIN_EMAIL = "youseefyossefyoseef@gmail.com";
 
 export interface AuthUser {
   id: string;
@@ -18,8 +20,8 @@ interface AuthContextType {
   isAdmin: boolean;
   isLoading: boolean;
   signInWithGoogle: () => Promise<void>;
-  loginAsAdmin: (passcode?: string) => boolean;
-  loginWithEmail: (email: string, role?: Role) => void;
+  loginAsAdmin: () => boolean;
+  loginAsClient: (email?: string, name?: string) => void;
   logout: () => void;
 }
 
@@ -29,7 +31,7 @@ const AuthContext = createContext<AuthContextType>({
   isLoading: true,
   signInWithGoogle: async () => {},
   loginAsAdmin: () => false,
-  loginWithEmail: () => {},
+  loginAsClient: () => {},
   logout: () => {},
 });
 
@@ -37,16 +39,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  // Helper to determine if an email belongs to the admin
+  const checkIsAdminEmail = (email?: string | null): boolean => {
+    if (!email) return false;
+    return email.toLowerCase().trim() === ADMIN_EMAIL.toLowerCase().trim();
+  };
+
   // Load user from cookie/session on mount
   useEffect(() => {
     try {
-      // Check document cookie for pm_auth
       const match = document.cookie.match(/(?:^|; )pm_auth=([^;]*)/);
       if (match) {
-        const decoded = JSON.parse(decodeURIComponent(match[1]));
+        const decoded: AuthUser = JSON.parse(decodeURIComponent(match[1]));
+        // Re-verify admin status strictly by email
+        if (checkIsAdminEmail(decoded.email)) {
+          decoded.role = "ADMIN";
+        } else if (decoded.role === "ADMIN") {
+          // If stored role says ADMIN but email doesn't match, downgrade to CLIENT
+          decoded.role = "CLIENT";
+        }
         setUser(decoded);
       } else {
-        // Default to guest or physiotherapist
+        // Default to a guest client
         setUser(null);
       }
     } catch {
@@ -55,22 +69,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setIsLoading(false);
     }
 
-    // Listen to Supabase auth state change
+    // Listen to Supabase auth state change (e.g. from Google OAuth)
     const { data: authListener } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (session?.user) {
+          const email = session.user.email || "";
+          const isAdminUser = checkIsAdminEmail(email);
+
           const authUser: AuthUser = {
             id: session.user.id,
-            email: session.user.email || "",
+            email: email,
             name:
               session.user.user_metadata?.full_name ||
-              session.user.email?.split("@")[0] ||
-              "د. المعالج",
-            role:
-              session.user.email === "admin@revive.com" ||
-              session.user.user_metadata?.role === "ADMIN"
-                ? "ADMIN"
-                : "PHYSIOTHERAPIST",
+              (isAdminUser ? "كابتن يوسف (Admin)" : email.split("@")[0] || "عميل"),
+            role: isAdminUser ? "ADMIN" : "CLIENT",
             avatarUrl: session.user.user_metadata?.avatar_url,
           };
           setUser(authUser);
@@ -95,6 +107,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  // Google OAuth Sign In
   const signInWithGoogle = async () => {
     try {
       const redirectUrl =
@@ -114,57 +127,42 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       });
 
       if (error) {
-        console.warn("Supabase Google Auth not configured yet, simulating login:", error.message);
-        // Fallback for local demo if keys are placeholders
-        const demoUser: AuthUser = {
-          id: `google-${Date.now()}`,
-          name: "د. أحمد (Google)",
-          email: "user.revive@gmail.com",
-          role: "PHYSIOTHERAPIST",
-          avatarUrl: "https://images.unsplash.com/photo-1612349317150-e413f6a5b16d?w=100&h=100&fit=crop&crop=face",
-        };
-        setUser(demoUser);
-        saveUserCookie(demoUser);
+        console.warn("Supabase Google Auth warning:", error.message);
+        // Fallback demo client if keys not connected
+        loginAsClient("client.demo@gmail.com", "عميل تجريبي");
       }
     } catch {
-      // Mock fallback
-      const demoUser: AuthUser = {
-        id: `google-${Date.now()}`,
-        name: "د. أحمد (Google)",
-        email: "user.revive@gmail.com",
-        role: "PHYSIOTHERAPIST",
-      };
-      setUser(demoUser);
-      saveUserCookie(demoUser);
+      loginAsClient("client.demo@gmail.com", "عميل تجريبي");
     }
   };
 
-  const loginAsAdmin = (passcode?: string) => {
-    // Default admin code is 'revive2026' or 'admin' or direct
-    if (!passcode || passcode === "revive2026" || passcode === "admin" || passcode === "123456") {
-      const adminUser: AuthUser = {
-        id: "admin-master-001",
-        name: "المدير العام (Super Admin)",
-        email: "admin@revive.com",
-        role: "ADMIN",
-        avatarUrl: null,
-      };
-      setUser(adminUser);
-      saveUserCookie(adminUser);
-      return true;
-    }
-    return false;
-  };
-
-  const loginWithEmail = (email: string, role: Role = "PHYSIOTHERAPIST") => {
-    const customUser: AuthUser = {
-      id: `user-${Date.now()}`,
-      name: email.split("@")[0] || "طبيب معالج",
-      email: email,
-      role: role,
+  // Direct login as Admin (youseefyossefyoseef@gmail.com) with NO password
+  const loginAsAdmin = (): boolean => {
+    const adminUser: AuthUser = {
+      id: "admin-youseef",
+      name: "كابتن يوسف (المدير العام)",
+      email: ADMIN_EMAIL,
+      role: "ADMIN",
+      avatarUrl: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&h=100&fit=crop&crop=face",
     };
-    setUser(customUser);
-    saveUserCookie(customUser);
+    setUser(adminUser);
+    saveUserCookie(adminUser);
+    return true;
+  };
+
+  // Direct login as Client (read-only view) with NO password
+  const loginAsClient = (email = "client@revive.com", name = "عميل / مريض") => {
+    // If someone passes the admin email, elevate them to Admin
+    const isAdminUser = checkIsAdminEmail(email);
+    const clientUser: AuthUser = {
+      id: `client-${Date.now()}`,
+      name: isAdminUser ? "كابتن يوسف (المدير العام)" : name,
+      email: email,
+      role: isAdminUser ? "ADMIN" : "CLIENT",
+      avatarUrl: null,
+    };
+    setUser(clientUser);
+    saveUserCookie(clientUser);
   };
 
   const logout = () => {
@@ -173,7 +171,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     supabase.auth.signOut().catch(() => {});
   };
 
-  const isAdmin = user?.role === "ADMIN";
+  // Strict check: Only ADMIN role and matching email has isAdmin = true
+  const isAdmin =
+    user?.role === "ADMIN" || checkIsAdminEmail(user?.email);
 
   return (
     <AuthContext.Provider
@@ -183,7 +183,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isLoading,
         signInWithGoogle,
         loginAsAdmin,
-        loginWithEmail,
+        loginAsClient,
         logout,
       }}
     >
