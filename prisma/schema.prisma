@@ -1,0 +1,478 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ═══════════════════════════════════════════════
+// AUTH & USERS
+// ═══════════════════════════════════════════════
+
+enum UserRole {
+  ADMIN
+  PHYSIOTHERAPIST
+  PATIENT
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String
+  role          UserRole  @default(PHYSIOTHERAPIST)
+  avatarUrl     String?
+  phone         String?
+  supabaseId    String?   @unique @map("supabase_id")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  patients         Patient[]
+  appointments     Appointment[]
+  savedPapers      SavedPaper[]
+  videoAnalyses    VideoAnalysis[]
+  consultations    OnlineConsultation[]
+
+  @@map("users")
+}
+
+// ═══════════════════════════════════════════════
+// PATIENTS & CASES
+// ═══════════════════════════════════════════════
+
+enum InjuredSide {
+  RIGHT
+  LEFT
+  BILATERAL
+}
+
+model Patient {
+  id               String      @id @default(cuid())
+  name             String
+  phone            String?
+  email            String?
+  dateOfBirth      DateTime?   @map("date_of_birth")
+  gender           String?
+  injuryType       String      @map("injury_type")
+  injuryDate       DateTime    @map("injury_date")
+  surgeryDate      DateTime?   @map("surgery_date")
+  rehabStartDate   DateTime    @map("rehab_start_date")
+  injuredSide      InjuredSide @map("injured_side")
+  mechanismOfInjury String?    @map("mechanism_of_injury")
+  notes            String?
+  status           String      @default("active")
+  createdAt        DateTime    @default(now()) @map("created_at")
+  updatedAt        DateTime    @updatedAt @map("updated_at")
+
+  userId           String      @map("user_id")
+  user             User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  romMeasurements    ROMMeasurement[]
+  girthMeasurements  GirthEvaluation[]
+  rehabPrograms      RehabProgram[]
+  appointments       Appointment[]
+  rtpEvaluations     RTPEvaluation[]
+  videoAnalyses      VideoAnalysis[]
+  consultations      OnlineConsultation[]
+  exerciseSchedules  ExerciseSchedule[]
+
+  @@map("patients")
+}
+
+// ═══════════════════════════════════════════════
+// ROM MEASUREMENTS
+// ═══════════════════════════════════════════════
+
+model ROMMeasurement {
+  id              String   @id @default(cuid())
+  patientId       String   @map("patient_id")
+  patient         Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  date            DateTime @default(now())
+  joint           String   // Knee, Hip, Ankle, Shoulder, Elbow, Wrist, Cervical, Thoracic, Lumbar
+  movement        String   // Flexion, Extension, Abduction, Adduction, Internal Rotation, External Rotation
+  injuredAngle    Float    @map("injured_angle")
+  healthyAngle    Float?   @map("healthy_angle")
+  notes           String?
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@map("rom_measurements")
+}
+
+// ═══════════════════════════════════════════════
+// GIRTH MEASUREMENTS
+// ═══════════════════════════════════════════════
+
+model GirthEvaluation {
+  id              String   @id @default(cuid())
+  patientId       String   @map("patient_id")
+  patient         Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  date            DateTime @default(now())
+  landmark        String   // e.g., "Above Patella", "Mid-Thigh"
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  measurements    GirthMeasurement[]
+
+  @@map("girth_evaluations")
+}
+
+model GirthMeasurement {
+  id              String          @id @default(cuid())
+  evaluationId    String          @map("evaluation_id")
+  evaluation      GirthEvaluation @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
+  distanceCm      Float           @map("distance_cm") // 0, 15, 30 cm
+  injuredCm       Float           @map("injured_cm")
+  healthyCm       Float?          @map("healthy_cm")
+
+  @@map("girth_measurements")
+}
+
+// ═══════════════════════════════════════════════
+// REHAB PROGRAMS
+// ═══════════════════════════════════════════════
+
+enum RehabPhase {
+  ACUTE
+  RESTORE_ROM
+  STRENGTH
+  NEUROMUSCULAR
+  FUNCTIONAL
+  RETURN_TO_SPORT
+}
+
+model RehabProgram {
+  id              String     @id @default(cuid())
+  patientId       String     @map("patient_id")
+  patient         Patient    @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  phase           RehabPhase
+  startDate       DateTime   @map("start_date")
+  endDate         DateTime?  @map("end_date")
+  notes           String?
+  isActive        Boolean    @default(true) @map("is_active")
+  createdAt       DateTime   @default(now()) @map("created_at")
+  updatedAt       DateTime   @updatedAt @map("updated_at")
+
+  programExercises ProgramExercise[]
+
+  @@map("rehab_programs")
+}
+
+model ProgramExercise {
+  id              String       @id @default(cuid())
+  programId       String       @map("program_id")
+  program         RehabProgram @relation(fields: [programId], references: [id], onDelete: Cascade)
+  exerciseId      String       @map("exercise_id")
+  exercise        Exercise     @relation(fields: [exerciseId], references: [id])
+  sets            Int          @default(3)
+  reps            Int          @default(10)
+  holdSeconds     Int?         @map("hold_seconds")
+  restSeconds     Int?         @map("rest_seconds")
+  notes           String?
+  orderIndex      Int          @default(0) @map("order_index")
+
+  @@map("program_exercises")
+}
+
+// ═══════════════════════════════════════════════
+// EXERCISE LIBRARY
+// ═══════════════════════════════════════════════
+
+enum ExerciseRegion {
+  UPPER
+  LOWER
+  CORE
+  FULL_BODY
+}
+
+model Exercise {
+  id              String         @id @default(cuid())
+  nameAr          String         @map("name_ar")
+  nameEn          String         @map("name_en")
+  descriptionAr   String?        @map("description_ar")
+  descriptionEn   String?        @map("description_en")
+  instructions    String?
+  region          ExerciseRegion
+  category        String         // e.g., "Quadriceps", "Hamstring", "Rotator Cuff"
+  isIsometric     Boolean        @default(false) @map("is_isometric")
+  isometricAngle  Float?         @map("isometric_angle") // 0, 30, 45, 60, 90
+  imageUrl        String?        @map("image_url")
+  videoUrl        String?        @map("video_url")
+  youtubeSearch   String?        @map("youtube_search")
+  isCustom        Boolean        @default(false) @map("is_custom")
+  createdById     String?        @map("created_by_id")
+  createdAt       DateTime       @default(now()) @map("created_at")
+
+  programExercises ProgramExercise[]
+  scheduleItems    ScheduleExercise[]
+  protocolExercises ProtocolExercise[]
+
+  @@map("exercises")
+}
+
+// ═══════════════════════════════════════════════
+// EXERCISE SCHEDULE (Daily tracking)
+// ═══════════════════════════════════════════════
+
+model ExerciseSchedule {
+  id          String   @id @default(cuid())
+  patientId   String   @map("patient_id")
+  patient     Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  date        DateTime
+  isRestDay   Boolean  @default(false) @map("is_rest_day")
+  notes       String?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  exercises   ScheduleExercise[]
+
+  @@map("exercise_schedules")
+}
+
+model ScheduleExercise {
+  id              String           @id @default(cuid())
+  scheduleId      String           @map("schedule_id")
+  schedule        ExerciseSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  exerciseId      String           @map("exercise_id")
+  exercise        Exercise         @relation(fields: [exerciseId], references: [id])
+  targetSets      Int              @map("target_sets")
+  targetReps      Int              @map("target_reps")
+  completedSets   Int              @default(0) @map("completed_sets")
+  completedReps   Int              @default(0) @map("completed_reps")
+  orderIndex      Int              @default(0) @map("order_index")
+
+  @@map("schedule_exercises")
+}
+
+// ═══════════════════════════════════════════════
+// INJURY PROTOCOLS
+// ═══════════════════════════════════════════════
+
+model InjuryProtocol {
+  id               String   @id @default(cuid())
+  nameAr           String   @map("name_ar")
+  nameEn           String   @map("name_en")
+  overviewAr       String?  @map("overview_ar")
+  overviewEn       String?  @map("overview_en")
+  rehabPrinciples  String?  @map("rehab_principles")
+  redFlags         String?  @map("red_flags")       // JSON array of strings
+  isCustom         Boolean  @default(false) @map("is_custom")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  phases           ProtocolPhase[]
+
+  @@map("injury_protocols")
+}
+
+model ProtocolPhase {
+  id              String         @id @default(cuid())
+  protocolId      String         @map("protocol_id")
+  protocol        InjuryProtocol @relation(fields: [protocolId], references: [id], onDelete: Cascade)
+  phase           RehabPhase
+  durationWeeks   String?        @map("duration_weeks")
+  goals           String?        // JSON array
+  criteria        String?        // JSON array — criteria to advance
+  orderIndex      Int            @default(0) @map("order_index")
+
+  exercises       ProtocolExercise[]
+
+  @@map("protocol_phases")
+}
+
+model ProtocolExercise {
+  id            String        @id @default(cuid())
+  phaseId       String        @map("phase_id")
+  phase         ProtocolPhase @relation(fields: [phaseId], references: [id], onDelete: Cascade)
+  exerciseId    String        @map("exercise_id")
+  exercise      Exercise      @relation(fields: [exerciseId], references: [id])
+  sets          Int?
+  reps          Int?
+  notes         String?
+  orderIndex    Int           @default(0) @map("order_index")
+
+  @@map("protocol_exercises")
+}
+
+// ═══════════════════════════════════════════════
+// APPOINTMENTS
+// ═══════════════════════════════════════════════
+
+enum AppointmentType {
+  IN_CLINIC
+  ONLINE
+}
+
+model Appointment {
+  id              String          @id @default(cuid())
+  patientId       String          @map("patient_id")
+  patient         Patient         @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  userId          String          @map("user_id")
+  user            User            @relation(fields: [userId], references: [id])
+  type            AppointmentType
+  date            DateTime
+  startTime       String          @map("start_time") // "09:00"
+  endTime         String          @map("end_time")   // "10:00"
+  recurringDays   String?         @map("recurring_days") // JSON array e.g. ["SUN","TUE","THU"]
+  notes           String?
+  status          String          @default("scheduled") // scheduled, completed, cancelled
+  createdAt       DateTime        @default(now()) @map("created_at")
+
+  @@map("appointments")
+}
+
+model ClinicHours {
+  id        String @id @default(cuid())
+  dayOfWeek Int    @map("day_of_week") // 0=Sun, 6=Sat
+  startTime String @map("start_time")
+  endTime   String @map("end_time")
+  isOpen    Boolean @default(true) @map("is_open")
+
+  @@map("clinic_hours")
+}
+
+// ═══════════════════════════════════════════════
+// RETURN TO PLAY
+// ═══════════════════════════════════════════════
+
+model RTPEvaluation {
+  id              String   @id @default(cuid())
+  patientId       String   @map("patient_id")
+  patient         Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  phase           RehabPhase
+  protocolName    String?  @map("protocol_name")
+  readinessScore  Float?   @map("readiness_score")
+  evaluatedAt     DateTime @default(now()) @map("evaluated_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  criteria        RTPCriterion[]
+
+  @@map("rtp_evaluations")
+}
+
+model RTPCriterion {
+  id             String        @id @default(cuid())
+  evaluationId   String        @map("evaluation_id")
+  evaluation     RTPEvaluation @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
+  criterionText  String        @map("criterion_text")
+  passed         Boolean       @default(false)
+  notes          String?
+
+  @@map("rtp_criteria")
+}
+
+// ═══════════════════════════════════════════════
+// ONLINE CONSULTATION
+// ═══════════════════════════════════════════════
+
+model OnlineConsultation {
+  id              String   @id @default(cuid())
+  patientId       String   @map("patient_id")
+  patient         Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  userId          String   @map("user_id")
+  user            User     @relation(fields: [userId], references: [id])
+  scheduledAt     DateTime @map("scheduled_at")
+  durationMinutes Int      @default(30) @map("duration_minutes")
+  meetingType     String   @map("meeting_type") // zoom, whatsapp, webrtc
+  meetingLink     String?  @map("meeting_link")
+  notes           String?
+  status          String   @default("scheduled") // scheduled, completed, cancelled
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@map("online_consultations")
+}
+
+// ═══════════════════════════════════════════════
+// VIDEO ANALYSIS
+// ═══════════════════════════════════════════════
+
+model VideoAnalysis {
+  id              String   @id @default(cuid())
+  patientId       String   @map("patient_id")
+  patient         Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  userId          String   @map("user_id")
+  user            User     @relation(fields: [userId], references: [id])
+  videoUrl        String   @map("video_url")
+  cameraPlane     String   @map("camera_plane") // sagittal, frontal
+  poseResults     String?  @map("pose_results") // JSON — keypoints per frame
+  annotations     String?  // JSON — manual angle annotations
+  kneeValgus      String?  @map("knee_valgus") // JSON — valgus detection results
+  thumbnailUrl    String?  @map("thumbnail_url")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@map("video_analyses")
+}
+
+// ═══════════════════════════════════════════════
+// SAVED RESEARCH PAPERS
+// ═══════════════════════════════════════════════
+
+model SavedPaper {
+  id          String   @id @default(cuid())
+  userId      String   @map("user_id")
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pmid        String
+  title       String
+  authors     String?
+  journal     String?
+  pubDate     String?  @map("pub_date")
+  abstract    String?
+  doi         String?
+  aiSummary   String?  @map("ai_summary")
+  tags        String?  // JSON array
+  savedAt     DateTime @default(now()) @map("saved_at")
+
+  @@map("saved_papers")
+}
+
+// ═══════════════════════════════════════════════
+// ANALYTICS
+// ═══════════════════════════════════════════════
+
+model PageVisit {
+  id            String   @id @default(cuid())
+  visitorId     String   @map("visitor_id")     // first-party cookie ID
+  fingerprint   String?                          // hashed IP+UA
+  userId        String?  @map("user_id")        // logged-in user
+  page          String
+  referrer      String?
+  userAgent     String?  @map("user_agent")
+  device        String?                          // mobile, tablet, desktop
+  browser       String?
+  os            String?
+  country       String?
+  city          String?
+  sessionId     String?  @map("session_id")
+  isBot         Boolean  @default(false) @map("is_bot")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@index([visitorId])
+  @@index([page])
+  @@map("page_visits")
+}
+
+model VisitorSession {
+  id           String    @id @default(cuid())
+  visitorId    String    @map("visitor_id")
+  userId       String?   @map("user_id")
+  startedAt    DateTime  @default(now()) @map("started_at")
+  lastActiveAt DateTime  @default(now()) @map("last_active_at")
+  pageCount    Int       @default(1) @map("page_count")
+  duration     Int       @default(0) // seconds
+  device       String?
+  country      String?
+
+  @@index([visitorId])
+  @@index([lastActiveAt])
+  @@map("visitor_sessions")
+}
+
+model VisitorHeartbeat {
+  id         String   @id @default(cuid())
+  visitorId  String   @map("visitor_id")
+  sessionId  String?  @map("session_id")
+  page       String
+  timestamp  DateTime @default(now())
+
+  @@index([timestamp])
+  @@map("visitor_heartbeats")
+}

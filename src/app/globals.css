@@ -1,0 +1,121 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;500;600;700;800&display=swap');
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 160 84% 39%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 215 28% 17%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 47%;
+    --accent: 210 40% 96%;
+    --accent-foreground: 222 47% 11%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 160 84% 39%;
+    --radius: 0.75rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-feature-settings: "ss01", "ss02";
+  }
+
+  /* Arabic numeral override */
+  .nums-ar {
+    font-feature-settings: "locl";
+  }
+}
+
+@layer components {
+  .glass-card {
+    @apply bg-white/80 backdrop-blur-sm border border-white/20 shadow-lg;
+  }
+
+  .gradient-header {
+    @apply bg-gradient-to-l from-navy-950 via-navy-900 to-slate-800;
+  }
+
+  .btn-primary {
+    @apply bg-emerald-600 hover:bg-emerald-700 text-white font-semibold
+           px-6 py-2.5 rounded-lg transition-all duration-200
+           shadow-sm hover:shadow-md active:scale-[0.98];
+  }
+
+  .btn-secondary {
+    @apply bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium
+           px-6 py-2.5 rounded-lg transition-all duration-200;
+  }
+
+  .status-badge {
+    @apply inline-flex items-center gap-1.5 px-3 py-1 rounded-full
+           text-xs font-semibold tracking-wide;
+  }
+
+  .status-active {
+    @apply status-badge bg-emerald-50 text-emerald-700 border border-emerald-200;
+  }
+
+  .status-completed {
+    @apply status-badge bg-blue-50 text-blue-700 border border-blue-200;
+  }
+
+  .status-cancelled {
+    @apply status-badge bg-red-50 text-red-700 border border-red-200;
+  }
+
+  .kpi-card {
+    @apply bg-white rounded-xl border border-slate-100 p-6 shadow-sm
+           hover:shadow-md transition-shadow duration-200;
+  }
+
+  .module-card {
+    @apply bg-white rounded-xl border border-slate-100 p-6 shadow-sm
+           hover:shadow-md hover:border-emerald-200 transition-all duration-300
+           cursor-pointer animate-fade-in;
+  }
+
+  .input-field {
+    @apply w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5
+           text-sm placeholder:text-slate-400 focus:border-emerald-500
+           focus:ring-2 focus:ring-emerald-500/20 focus:outline-none
+           transition-all duration-200;
+  }
+
+  .table-header {
+    @apply bg-slate-50 text-slate-600 text-xs font-semibold uppercase tracking-wider;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  @apply bg-slate-100;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-slate-300 rounded-full hover:bg-slate-400;
+}
+
+/* RTL-specific overrides */
+[dir="rtl"] .recharts-cartesian-axis-tick text {
+  text-anchor: start !important;
+}
