@@ -38,7 +38,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { useAuth, ADMIN_EMAIL } from "@/lib/auth-context";
+import { useAuth } from "@/lib/auth-context";
 import { getPhaseLabel } from "@/lib/utils";
 
 // ── TYPES ──
@@ -81,9 +81,7 @@ interface ExerciseItem {
 export default function HomePage() {
   const { user, isAdmin, loginAsAdmin } = useAuth();
 
-  // Mode switcher: Admin can toggle preview of Client UI
-  const [previewAsClient, setPreviewAsClient] = useState(false);
-  const effectiveIsAdmin = isAdmin && !previewAsClient;
+  const effectiveIsAdmin = isAdmin;
 
   const [activeMainTab, setActiveMainTab] = useState<"cases" | "exercises">("cases");
   const [cases, setCases] = useState<CaseItem[]>([]);
@@ -318,115 +316,64 @@ export default function HomePage() {
     <div className="min-h-screen bg-slate-50/80 py-8 px-4 sm:px-6 lg:px-8">
       <div className="max-w-7xl mx-auto space-y-8">
 
-        {/* ══════════════════════════════════════════════
-            HEADER SECTION: ADMIN UI vs CLIENT UI
-            ══════════════════════════════════════════════ */}
-        {effectiveIsAdmin ? (
-          /* ── ADMIN UI HEADER (youseefyossefyoseef@gmail.com) ── */
-          <div className="bg-gradient-to-r from-slate-900 via-navy-950 to-slate-900 rounded-3xl p-6 sm:p-8 text-white shadow-xl border border-amber-500/30 relative overflow-hidden">
-            <div className="absolute top-0 right-0 left-0 h-1.5 bg-gradient-to-r from-amber-400 via-amber-300 to-amber-500" />
-            <div className="absolute top-0 left-0 w-96 h-96 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
+        {/* ── TOP PLATFORM HEADER ── */}
+        <div className="bg-gradient-to-r from-navy-950 via-slate-900 to-navy-900 rounded-3xl p-6 sm:p-8 text-white shadow-xl border border-white/10 relative overflow-hidden">
+          <div className="absolute top-0 right-0 left-0 h-1.5 bg-gradient-to-r from-emerald-500 via-teal-400 to-emerald-600" />
+          <div className="absolute top-0 left-0 w-96 h-96 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
 
-            <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
-              <div className="space-y-2">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <Badge className="bg-amber-400 text-slate-950 font-black text-xs px-3 py-1 gap-1.5 shadow-sm">
-                    <ShieldCheck className="w-3.5 h-3.5 text-slate-950" />
-                    <span>واجهة مدير النظام (Admin UI — تحكم وتعديل كامل)</span>
+          <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Badge className="bg-emerald-500/20 text-emerald-300 border-emerald-500/30 text-xs px-3 py-1 font-bold gap-1.5 shadow-sm">
+                  <Activity className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
+                  <span>منصة Revive السريرية للتأهيل الحركي</span>
+                </Badge>
+
+                {isAdmin && (
+                  <Badge className="bg-amber-400 text-slate-950 font-black text-xs px-2.5 py-0.5 gap-1 shadow-sm">
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    <span>لوحة تحكم المدير</span>
                   </Badge>
-
-                  <span className="text-xs text-amber-300 font-mono bg-amber-400/15 px-2.5 py-0.5 rounded-lg border border-amber-400/30 dir-ltr">
-                    {ADMIN_EMAIL}
-                  </span>
-                </div>
-
-                <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
-                  إدارة الحالات والبرامج التأهيلية السريرية
-                </h1>
-                <p className="text-xs sm:text-sm text-slate-300 max-w-2xl leading-relaxed">
-                  مرحباً كابتن يوسف! بصفتك مدير النظام، تظهر لك أدوات التعديل والحذف والإضافة المباشرة للحالات والتمارين.
-                </p>
+                )}
               </div>
 
-              {/* Admin Actions */}
-              <div className="flex items-center gap-2.5 flex-wrap">
-                <Button
-                  onClick={() => setIsAddCaseModalOpen(true)}
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs gap-1.5 shadow-md shadow-emerald-600/30"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>+ إضافة حالة مريض</span>
-                </Button>
-
-                <Button
-                  onClick={() => setIsAddExerciseModalOpen(true)}
-                  className="bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs gap-1.5 shadow-md shadow-blue-600/30"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>+ إضافة تمرين</span>
-                </Button>
-
-                <Link
-                  href="/admin"
-                  className="px-3.5 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-xs font-bold flex items-center gap-1.5 transition"
-                >
-                  <ShieldCheck className="w-4 h-4 text-amber-400" />
-                  <span>لوحة الإدارة</span>
-                </Link>
-
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setPreviewAsClient(true)}
-                  className="text-xs text-slate-400 hover:text-white hover:bg-white/10 rounded-xl"
-                  title="معاينة الواجهة كما تظهر للعميل"
-                >
-                  <Eye className="w-3.5 h-3.5 ml-1" />
-                  <span>معاينة واجهة العميل</span>
-                </Button>
-              </div>
+              <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
+                دليل الحالات والبرامج التأهيلية السريرية
+              </h1>
+              <p className="text-xs sm:text-sm text-slate-300 max-w-2xl leading-relaxed">
+                استعراض فوري لبرامج تعافي المرضى، قياسات المدى الحركي (ROM)، ومكتبة التمارين المعتمدة لإصابات الملاعب
+              </p>
             </div>
 
-            {/* Admin Search Bar */}
-            <div className="relative mt-6">
-              <Search className="w-4 h-4 text-slate-400 absolute right-4 top-3.5" />
-              <Input
-                placeholder="ابحث في سجل الحالات بالاسم، نوع الإصابة (ACL, Meniscus...) أو رقم الهاتف..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pr-11 h-11 bg-white/10 border-white/20 text-white placeholder:text-slate-400 rounded-2xl text-xs focus:bg-white/20 focus:border-amber-400 transition-all"
-              />
-            </div>
-          </div>
-        ) : (
-          /* ── CLIENT UI HEADER (View Only) ── */
-          <div className="bg-gradient-to-r from-navy-950 via-slate-900 to-teal-950 rounded-3xl p-6 sm:p-8 text-white shadow-xl border border-teal-500/20 relative overflow-hidden">
-            <div className="absolute top-0 right-0 left-0 h-1.5 bg-gradient-to-r from-teal-400 via-emerald-400 to-teal-500" />
-            <div className="absolute top-0 left-0 w-96 h-96 bg-teal-500/10 rounded-full blur-3xl pointer-events-none" />
+            {/* Actions: Admin vs Client */}
+            <div className="flex items-center gap-2.5 flex-wrap">
+              {isAdmin ? (
+                <>
+                  <Button
+                    onClick={() => setIsAddCaseModalOpen(true)}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs gap-1.5 shadow-md shadow-emerald-600/30"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>إضافة حالة مريض</span>
+                  </Button>
 
-            <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
-              <div className="space-y-2">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <Badge className="bg-teal-500/20 text-teal-300 border-teal-500/30 text-xs px-3 py-1 font-bold gap-1.5 shadow-sm">
-                    <Eye className="w-3.5 h-3.5 text-teal-400" />
-                    <span>واجهة العميل — استعراض الحالات والبرامج التأهيلية</span>
-                  </Badge>
+                  <Button
+                    onClick={() => setIsAddExerciseModalOpen(true)}
+                    className="bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs gap-1.5 shadow-md shadow-blue-600/30"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>إضافة تمرين</span>
+                  </Button>
 
-                  <Badge variant="outline" className="text-slate-400 border-white/15 text-[11px]">
-                    عرض وتفاصيل فقط (Read-Only)
-                  </Badge>
-                </div>
-
-                <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
-                  دليل الحالات والبرامج التأهيلية السريرية
-                </h1>
-                <p className="text-xs sm:text-sm text-slate-300 max-w-2xl leading-relaxed">
-                  استعرض تفاصيل الحالات، المراحل العلاجية للتعافي من إصابات الملاعب، وخطوات أداء التمارين المعتمدة بالفيديو.
-                </p>
-              </div>
-
-              {/* Client Action Buttons */}
-              <div className="flex items-center gap-3 flex-wrap">
+                  <Link
+                    href="/admin"
+                    className="px-3.5 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-xs font-bold flex items-center gap-1.5 transition"
+                  >
+                    <ShieldCheck className="w-4 h-4 text-amber-400" />
+                    <span>لوحة الإدارة</span>
+                  </Link>
+                </>
+              ) : (
                 <a
                   href="https://wa.me/201275829322?text=مرحباً%20دكتور،%20أود%20الاستفسار%20عن%20برنامج%20تأهيلي%20أو%20حجز%20موعد"
                   target="_blank"
@@ -436,33 +383,21 @@ export default function HomePage() {
                   <MessageCircle className="w-4 h-4" />
                   <span>حجز استشارة أو تقييم حالة</span>
                 </a>
-
-                {isAdmin && previewAsClient && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setPreviewAsClient(false)}
-                    className="rounded-xl border-amber-400 text-amber-300 bg-amber-400/10 text-xs font-bold"
-                  >
-                    <ShieldCheck className="w-3.5 h-3.5 ml-1" />
-                    <span>الرجوع لواجهة الإدارة (Admin)</span>
-                  </Button>
-                )}
-              </div>
-            </div>
-
-            {/* Client Search Bar */}
-            <div className="relative mt-6">
-              <Search className="w-4 h-4 text-slate-400 absolute right-4 top-3.5" />
-              <Input
-                placeholder="ابحث بالاسم، نوع الإصابة (مثل ACL, Tendinopathy)، أو اسم التمرين..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pr-11 h-11 bg-white/10 border-white/20 text-white placeholder:text-slate-400 rounded-2xl text-xs focus:bg-white/20 focus:border-teal-400 transition-all"
-              />
+              )}
             </div>
           </div>
-        )}
+
+          {/* Search Bar */}
+          <div className="relative mt-6">
+            <Search className="w-4 h-4 text-slate-400 absolute right-4 top-3.5" />
+            <Input
+              placeholder="ابحث بالاسم، نوع الإصابة (مثل ACL, Tendinopathy)، أو اسم التمرين..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pr-11 h-11 bg-white/10 border-white/20 text-white placeholder:text-slate-400 rounded-2xl text-xs focus:bg-white/20 focus:border-emerald-400 transition-all"
+            />
+          </div>
+        </div>
 
         {/* ── MAIN DUAL TABS: CASES vs EXERCISES ── */}
         <div className="space-y-6">
@@ -769,28 +704,6 @@ export default function HomePage() {
           )}
 
         </div>
-
-        {/* ── CLIENT HELPER FOOTER BANNER (If viewing as client) ── */}
-        {!effectiveIsAdmin && (
-          <div className="rounded-2xl bg-white p-5 border border-slate-200 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-4 text-center sm:text-start">
-            <div className="space-y-1">
-              <div className="text-xs font-bold text-slate-900 flex items-center justify-center sm:justify-start gap-1.5">
-                <ShieldCheck className="w-4 h-4 text-amber-500" />
-                <span>أنت تتصفح حالياً واجهة العميل (عرض التفاصيل فقط)</span>
-              </div>
-              <p className="text-[11px] text-slate-500">
-                إذا كنت مدير المنصة وتريد إضافة أو تعديل الحالات والتمارين، يمكنك الدخول بحساب المدير بدون كلمة مرور.
-              </p>
-            </div>
-
-            <Link
-              href="/login"
-              className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold shrink-0 transition"
-            >
-              تسجيل الدخول كمدير النظام
-            </Link>
-          </div>
-        )}
 
         {/* ── MODAL: COMPREHENSIVE CASE DETAIL VIEW (Client & Admin) ── */}
         <Dialog open={isDetailModalOpen} onOpenChange={setIsDetailModalOpen}>

@@ -7,35 +7,30 @@ import {
   ShieldCheck,
   User,
   ArrowRight,
-  Sparkles,
   CheckCircle2,
   Activity,
-  HeartPulse,
-  Eye,
-  Info,
-  Check,
   Lock,
 } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { useAuth, ADMIN_EMAIL } from "@/lib/auth-context";
+import { useAuth } from "@/lib/auth-context";
 
 export default function LoginPage() {
   const router = useRouter();
-  const { user, isAdmin, signInWithGoogle, loginAsAdmin, loginAsClient, logout } = useAuth();
+  const { user, isAdmin, signInWithGoogle, loginAsClient, logout } = useAuth();
 
-  const [customEmail, setCustomEmail] = useState("");
+  const [email, setEmail] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [successMessage, setSuccessMessage] = useState("");
+  const [message, setMessage] = useState("");
 
   const handleGoogleSignIn = async () => {
     setIsLoading(true);
-    setSuccessMessage("");
+    setMessage("");
     try {
       await signInWithGoogle();
-      setSuccessMessage("جاري الاتصال بخدمة Google...");
+      setMessage("جاري تسجيل الدخول...");
       setTimeout(() => {
         router.push("/");
       }, 1000);
@@ -44,34 +39,12 @@ export default function LoginPage() {
     }
   };
 
-  const handleDirectAdminLogin = () => {
-    setIsLoading(true);
-    loginAsAdmin();
-    setSuccessMessage("مرحباً بك كابتن يوسف! تم تفعيل واجهة وصلاحيات المدير العام (Admin) بنجاح.");
-    setTimeout(() => {
-      router.push("/");
-    }, 800);
-  };
-
-  const handleDirectClientLogin = () => {
-    setIsLoading(true);
-    loginAsClient("client.visitor@revive.com", "عميل / مريض");
-    setSuccessMessage("تم تسجيل الدخول كعميل (عرض التفاصيل والبرامج التأهيلية فقط).");
-    setTimeout(() => {
-      router.push("/");
-    }, 800);
-  };
-
-  const handleCustomEmailLogin = (e: React.FormEvent) => {
+  const handleEmailSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!customEmail.trim()) return;
+    if (!email.trim()) return;
     setIsLoading(true);
-    loginAsClient(customEmail.trim());
-    if (customEmail.toLowerCase().trim() === ADMIN_EMAIL.toLowerCase()) {
-      setSuccessMessage("مرحباً بك كابتن يوسف! تم التعرف على بريدك كمدير للنظام.");
-    } else {
-      setSuccessMessage("تم تسجيل الدخول كعميل (عرض التفاصيل فقط).");
-    }
+    loginAsClient(email.trim());
+    setMessage("تم تسجيل الدخول بنجاح.");
     setTimeout(() => {
       router.push("/");
     }, 800);
@@ -79,7 +52,7 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-900 via-navy-950 to-slate-900 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-xl w-full space-y-6">
+      <div className="max-w-md w-full space-y-6">
 
         {/* Brand Header */}
         <div className="text-center">
@@ -96,25 +69,22 @@ export default function LoginPage() {
               </span>
             </div>
           </Link>
-          <h2 className="mt-4 text-xl sm:text-2xl font-black text-white">
-            تسجيل الدخول وتحديد الصلاحيات
+          <h2 className="mt-4 text-2xl font-black text-white">
+            تسجيل الدخول
           </h2>
-          <p className="mt-1 text-sm text-slate-400">
-            واجهة المدير المخصصة للتحكم والتعديل • واجهة العميل للاطلاع على تفاصيل البرامج
+          <p className="mt-1 text-xs text-slate-400">
+            سجّل دخولك للمتابعة والاطلاع على برامجك التأهيلية
           </p>
         </div>
 
-        {/* Current Active Status if logged in */}
+        {/* Current status if already logged in */}
         {user && (
           <div className="p-4 rounded-2xl bg-slate-800/80 border border-slate-700 text-center text-sm text-slate-300">
             <div className="flex items-center justify-center gap-2 mb-2 font-bold text-white">
               <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-              <span>أنت مسجل حالياً كـ: {user.name}</span>
-              <Badge variant={isAdmin ? "default" : "secondary"} className={isAdmin ? "bg-amber-500 text-slate-950" : "bg-slate-700"}>
-                {isAdmin ? "مدير النظام (Admin)" : "عميل (Client - عرض فقط)"}
-              </Badge>
+              <span>مرحباً، {user.name}</span>
             </div>
-            <div className="flex items-center justify-center gap-3 mt-3">
+            <div className="flex items-center justify-center gap-4 mt-3">
               <Link href="/" className="text-xs text-emerald-400 hover:underline font-bold">
                 الذهاب للرئيسية ←
               </Link>
@@ -129,119 +99,24 @@ export default function LoginPage() {
         )}
 
         {/* Success Alert */}
-        {successMessage && (
-          <div className="p-3.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-sm flex items-center gap-2">
-            <CheckCircle2 className="w-5 h-5 shrink-0" />
-            <span>{successMessage}</span>
+        {message && (
+          <div className="p-3.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs text-center flex items-center justify-center gap-2">
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <span>{message}</span>
           </div>
         )}
 
-        {/* Two Dedicated Portals: Admin vs Client */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Clean Login Card */}
+        <Card className="border-slate-800 bg-slate-900/90 shadow-2xl">
+          <CardContent className="space-y-4 pt-6">
 
-          {/* 1. Admin Dedicated Portal */}
-          <Card className="border-amber-500/40 bg-slate-900/90 shadow-xl relative overflow-hidden flex flex-col justify-between">
-            <div className="absolute top-0 right-0 left-0 h-1.5 bg-gradient-to-r from-amber-400 to-amber-600" />
-            <CardHeader className="pb-3 pt-5">
-              <div className="w-10 h-10 rounded-xl bg-amber-500/15 text-amber-400 flex items-center justify-center mb-2">
-                <ShieldCheck className="w-6 h-6" />
-              </div>
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-lg font-black text-white">
-                  واجهة المدير (Admin)
-                </CardTitle>
-                <Badge className="bg-amber-400/20 text-amber-300 border border-amber-400/30 text-[10px]">
-                  صلاحيات كاملة
-                </Badge>
-              </div>
-              <CardDescription className="text-xs text-slate-300 leading-relaxed mt-1">
-                خاصة بالمدير المسؤول فقط: إضافة حالات، تعديل وحذف البرامج والتمارين.
-              </CardDescription>
-            </CardHeader>
-
-            <CardContent className="space-y-3 pt-0">
-              <div className="p-2.5 rounded-lg bg-amber-950/30 border border-amber-800/40 text-[11px] text-amber-200/90 leading-tight">
-                <div className="font-bold mb-0.5">الحساب المعتمد للمدير:</div>
-                <div className="font-mono text-emerald-400 dir-ltr text-right select-all">
-                  {ADMIN_EMAIL}
-                </div>
-                <div className="text-slate-400 text-[10px] mt-1">
-                  بدون أي كلمة سر • مرتبط مباشرة بالبريد
-                </div>
-              </div>
-
-              <Button
-                onClick={handleDirectAdminLogin}
-                disabled={isLoading}
-                className="w-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 font-black shadow-md shadow-amber-500/20 py-5"
-              >
-                <ShieldCheck className="w-4 h-4 ml-2" />
-                <span>دخول كمدير النظام (Admin)</span>
-              </Button>
-            </CardContent>
-          </Card>
-
-          {/* 2. Client Dedicated Portal */}
-          <Card className="border-teal-500/30 bg-slate-900/90 shadow-xl relative overflow-hidden flex flex-col justify-between">
-            <div className="absolute top-0 right-0 left-0 h-1.5 bg-gradient-to-r from-teal-400 to-emerald-500" />
-            <CardHeader className="pb-3 pt-5">
-              <div className="w-10 h-10 rounded-xl bg-teal-500/15 text-teal-400 flex items-center justify-center mb-2">
-                <User className="w-6 h-6" />
-              </div>
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-lg font-black text-white">
-                  واجهة العميل (Client)
-                </CardTitle>
-                <Badge className="bg-teal-400/20 text-teal-300 border border-teal-400/30 text-[10px]">
-                  عرض التفاصيل فقط
-                </Badge>
-              </div>
-              <CardDescription className="text-xs text-slate-300 leading-relaxed mt-1">
-                للمرضى والزوار: استعراض الحالات، البرامج التأهيلية، التمارين والفيديوهات.
-              </CardDescription>
-            </CardHeader>
-
-            <CardContent className="space-y-3 pt-0">
-              <div className="p-2.5 rounded-lg bg-slate-800/60 border border-slate-700 text-[11px] text-slate-300 leading-tight">
-                <div className="font-bold text-teal-400 mb-0.5">مميزات حساب العميل:</div>
-                <div className="text-slate-400 text-[10px]">
-                  مشاهدة تفاصيل التشخيص ومدى الحركة (ROM) والتواصل مع العيادة بدون أي أزرار تعديل.
-                </div>
-              </div>
-
-              <Button
-                onClick={handleDirectClientLogin}
-                disabled={isLoading}
-                variant="outline"
-                className="w-full border-teal-500/40 text-teal-300 hover:bg-teal-500/10 font-bold py-5"
-              >
-                <Eye className="w-4 h-4 ml-2" />
-                <span>دخول كعميل (عرض التفاصيل)</span>
-              </Button>
-            </CardContent>
-          </Card>
-
-        </div>
-
-        {/* Google OAuth & Custom Email Option */}
-        <Card className="border-slate-800 bg-slate-900/70">
-          <CardHeader className="pb-2 text-center">
-            <CardTitle className="text-sm font-bold text-slate-300">
-              أو تسجيل الدخول المباشر عبر Google
-            </CardTitle>
-            <CardDescription className="text-xs text-slate-400">
-              إذا سجلت بـ <span className="text-amber-400 font-mono">{ADMIN_EMAIL}</span> ستتحول لمدير تلقائياً، وأي إيميل آخر سيكون كعميل.
-            </CardDescription>
-          </CardHeader>
-
-          <CardContent className="space-y-4 pt-2">
             {/* Google OAuth Button */}
             <Button
               type="button"
               variant="outline"
               onClick={handleGoogleSignIn}
               disabled={isLoading}
-              className="w-full py-5 border-slate-700 bg-white/5 hover:bg-white/10 text-white font-bold flex items-center justify-center gap-3 transition"
+              className="w-full py-5 border-slate-700 bg-white/5 hover:bg-white/10 text-white font-bold flex items-center justify-center gap-3 transition rounded-xl"
             >
               <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24">
                 <path
@@ -261,41 +136,46 @@ export default function LoginPage() {
                   d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
                 />
               </svg>
-              <span>تسجيل الدخول باستخدام Google</span>
+              <span>المتابعة باستخدام Google</span>
             </Button>
 
-            <div className="relative flex items-center justify-center my-2">
+            <div className="relative flex items-center justify-center my-4">
               <div className="border-t border-slate-800 w-full" />
-              <span className="bg-slate-900 px-3 text-[11px] text-slate-500 font-medium">أو أدخل أي بريد بدون كلمة مرور</span>
+              <span className="bg-slate-900 px-3 text-[11px] text-slate-500 font-medium">أو عبر البريد الإلكتروني</span>
               <div className="border-t border-slate-800 w-full" />
             </div>
 
-            {/* Custom Email without password */}
-            <form onSubmit={handleCustomEmailLogin} className="flex gap-2">
-              <Input
-                type="email"
-                placeholder="your-email@gmail.com"
-                value={customEmail}
-                onChange={(e) => setCustomEmail(e.target.value)}
-                className="bg-slate-800 border-slate-700 text-white text-xs text-left dir-ltr"
-              />
+            {/* Email Input Form */}
+            <form onSubmit={handleEmailSubmit} className="space-y-3">
+              <div className="space-y-1.5">
+                <Input
+                  type="email"
+                  required
+                  placeholder="your-email@example.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="bg-slate-800/80 border-slate-700 text-white text-xs text-left dir-ltr rounded-xl h-11"
+                />
+              </div>
+
               <Button
                 type="submit"
-                disabled={isLoading || !customEmail.trim()}
-                className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-4 shrink-0"
+                disabled={isLoading || !email.trim()}
+                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs h-11 rounded-xl shadow-md shadow-emerald-600/20"
               >
-                دخول
+                تسجيل الدخول
               </Button>
             </form>
+
           </CardContent>
 
           <CardFooter className="pt-0 justify-between text-xs text-slate-500 border-t border-slate-800/80 px-6 py-3">
             <Link href="/" className="hover:text-emerald-400 flex items-center gap-1 transition">
-              <span>تصفح بدون تسجيل دخول</span>
+              <span>تصفح كزائر</span>
               <ArrowRight className="w-3.5 h-3.5" />
             </Link>
             <Link href="/contact" className="hover:text-emerald-400 transition">
-              تواصل مع الدعم الفني
+              تواصل مع الدعم
             </Link>
           </CardFooter>
         </Card>

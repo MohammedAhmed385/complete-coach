@@ -314,9 +314,6 @@ export default function AddCasePage() {
             <p className="text-xs text-slate-500 leading-relaxed">
               إضافة الحالات السريرية مقتصرة على مدير النظام. يمكن للعملاء والزوار استعراض الحالات والتفاصيل من الصفحة الرئيسية.
             </p>
-            <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-xs font-mono text-amber-900 text-center">
-              {ADMIN_EMAIL}
-            </div>
           </div>
 
           <div className="pt-2 space-y-3">

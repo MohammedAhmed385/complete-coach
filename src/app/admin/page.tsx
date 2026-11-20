@@ -177,11 +177,8 @@ export default function AdminPage() {
               واجهة مخصصة لمدير النظام
             </h2>
             <p className="text-xs text-slate-500 leading-relaxed">
-              هذه اللوحة خاصة بمدير منصة <strong>Revive</strong> لتعديل جميع بيانات الموقع والحالات والتمارين.
+              هذه اللوحة خاصة بمدير منصة <strong>Revive</strong> لتعديل جميع بيانات الموقع والحالات والتمارين. يرجى تسجيل الدخول بحساب المدير للمتابعة.
             </p>
-            <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-xs font-mono text-amber-900 text-center">
-              {ADMIN_EMAIL}
-            </div>
           </div>
 
           <div className="pt-2 space-y-3">

@@ -24,7 +24,7 @@ import {
   Eye,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useAuth, ADMIN_EMAIL } from "@/lib/auth-context";
+import { useAuth } from "@/lib/auth-context";
 
 // Admin-only navigation items
 const adminNavItems = [
@@ -205,7 +205,7 @@ export function Navbar() {
                     <div>
                       <div className="text-white text-xs font-bold">{user.name}</div>
                       <div className="text-[10px] text-slate-400">
-                        {isAdmin ? ADMIN_EMAIL : "واجهة العميل (عرض فقط)"}
+                        {isAdmin ? "مدير النظام" : "حساب العميل"}
                       </div>
                     </div>
                   </div>
