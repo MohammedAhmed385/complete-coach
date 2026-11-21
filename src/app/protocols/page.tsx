@@ -26,6 +26,7 @@ import {
   Layers,
   HeartPulse,
   RefreshCw,
+  Trash2,
 } from "lucide-react";
 import {
   Card,
@@ -273,6 +274,11 @@ function ProtocolsContent() {
   const [isSubmittingNewProtocol, setIsSubmittingNewProtocol] = useState<boolean>(false);
   const [addProtocolError, setAddProtocolError] = useState<string | null>(null);
 
+  // Delete Protocol Confirmation State
+  const [protocolToDelete, setProtocolToDelete] = useState<ProtocolItem | null>(null);
+  const [isDeletingProtocol, setIsDeletingProtocol] = useState<boolean>(false);
+  const [deleteProtocolError, setDeleteProtocolError] = useState<string | null>(null);
+
   // ═══════════════════════════════════════════════
   // DATA FETCHING
   // ═══════════════════════════════════════════════
@@ -292,9 +298,13 @@ function ProtocolsContent() {
       }
 
       let localProtocols: ProtocolItem[] = [];
+      let deletedIds: string[] = [];
       if (typeof window !== "undefined") {
         try {
           localProtocols = JSON.parse(localStorage.getItem("revive_custom_protocols") || "[]");
+        } catch {}
+        try {
+          deletedIds = JSON.parse(localStorage.getItem("revive_deleted_protocols") || "[]");
         } catch {}
       }
 
@@ -310,7 +320,7 @@ function ProtocolsContent() {
 
       const map = new Map<string, ProtocolItem>();
       [...localProtocols, ...serverProtocols].forEach((p) => {
-        if (p && p.id) map.set(p.id, p);
+        if (p && p.id && !deletedIds.includes(p.id)) map.set(p.id, p);
       });
 
       setProtocols(Array.from(map.values()));
@@ -320,6 +330,48 @@ function ProtocolsContent() {
       setError(msg);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const confirmDeleteProtocol = async () => {
+    if (!protocolToDelete) return;
+    setIsDeletingProtocol(true);
+    setDeleteProtocolError(null);
+    try {
+      const res = await fetch(`/api/protocols?id=${encodeURIComponent(protocolToDelete.id)}`, {
+        method: "DELETE",
+      });
+
+      if (!res.ok) {
+        throw new Error("فشل حذف البروتوكول من الخادم");
+      }
+
+      if (typeof window !== "undefined") {
+        try {
+          const localProtocols = JSON.parse(localStorage.getItem("revive_custom_protocols") || "[]");
+          const filtered = localProtocols.filter((p: any) => p.id !== protocolToDelete.id);
+          localStorage.setItem("revive_custom_protocols", JSON.stringify(filtered));
+
+          const deletedIds = JSON.parse(localStorage.getItem("revive_deleted_protocols") || "[]");
+          if (!deletedIds.includes(protocolToDelete.id)) {
+            deletedIds.push(protocolToDelete.id);
+            localStorage.setItem("revive_deleted_protocols", JSON.stringify(deletedIds));
+          }
+        } catch {}
+      }
+
+      setProtocols((prev) => prev.filter((p) => p.id !== protocolToDelete.id));
+      if (selectedProtocol?.id === protocolToDelete.id) {
+        setIsDetailOpen(false);
+        setSelectedProtocol(null);
+      }
+      setProtocolToDelete(null);
+    } catch (err: unknown) {
+      console.error("Delete protocol error:", err);
+      const msg = err instanceof Error ? err.message : "حدث خطأ أثناء حذف البروتوكول";
+      setDeleteProtocolError(msg);
+    } finally {
+      setIsDeletingProtocol(false);
     }
   };
 
@@ -920,6 +972,19 @@ function ProtocolsContent() {
                     >
                       <UserPlus className="w-4 h-4" />
                     </Button>
+
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setProtocolToDelete(proto);
+                      }}
+                      title="حذف البروتوكول (Admin)"
+                      className="h-10 w-10 shrink-0 border-rose-200 hover:border-rose-400 hover:bg-rose-50 text-rose-600 hover:text-rose-700"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
                   </CardFooter>
                 </Card>
               );
@@ -956,17 +1021,29 @@ function ProtocolsContent() {
                     </DialogDescription>
                   </div>
 
-                  {/* Apply Button */}
-                  <Button
-                    onClick={() => {
-                      setIsDetailOpen(false);
-                      handleOpenApplyModal(selectedProtocol);
-                    }}
-                    className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2 h-10 shadow-sm"
-                  >
-                    <UserPlus className="w-4 h-4" />
-                    <span>تطبيق على مريض</span>
-                  </Button>
+                  {/* Action Buttons */}
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      onClick={() => setProtocolToDelete(selectedProtocol)}
+                      title="حذف البروتوكول (Admin)"
+                      className="border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700 h-10 gap-1.5"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      <span className="hidden sm:inline">حذف</span>
+                    </Button>
+
+                    <Button
+                      onClick={() => {
+                        setIsDetailOpen(false);
+                        handleOpenApplyModal(selectedProtocol);
+                      }}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2 h-10 shadow-sm"
+                    >
+                      <UserPlus className="w-4 h-4" />
+                      <span>تطبيق على مريض</span>
+                    </Button>
+                  </div>
                 </div>
               </DialogHeader>
 
@@ -1907,6 +1984,76 @@ function ProtocolsContent() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* ═══════════════════════════════════════════════
+          6. DELETE PROTOCOL CONFIRMATION DIALOG
+      ═══════════════════════════════════════════════ */}
+      <Dialog
+        open={Boolean(protocolToDelete)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setProtocolToDelete(null);
+            setDeleteProtocolError(null);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md" dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-bold text-rose-600 flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-rose-500" />
+              تأكيد حذف البروتوكول التأهيلي
+            </DialogTitle>
+            <DialogDescription className="text-slate-600 pt-2 text-sm leading-relaxed">
+              هل أنت متأكد من رغبتك في حذف بروتوكول{" "}
+              <strong className="text-slate-900 font-bold">
+                "{protocolToDelete?.nameAr} ({protocolToDelete?.nameEn})"
+              </strong>
+              ؟
+              <span className="block text-xs text-rose-500 mt-2 font-medium">
+                تنبيه: سيتم حذف كافة المراحل والمعايير العلاجية والتمارين المقترحة المسجلة في هذا البروتوكول نهائياً.
+              </span>
+            </DialogDescription>
+          </DialogHeader>
+
+          {deleteProtocolError && (
+            <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-rose-700 text-xs">
+              {deleteProtocolError}
+            </div>
+          )}
+
+          <DialogFooter className="gap-2 sm:gap-0 pt-3">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setProtocolToDelete(null);
+                setDeleteProtocolError(null);
+              }}
+              disabled={isDeletingProtocol}
+            >
+              إلغاء
+            </Button>
+            <Button
+              type="button"
+              onClick={confirmDeleteProtocol}
+              disabled={isDeletingProtocol}
+              className="bg-rose-600 hover:bg-rose-700 text-white font-bold gap-2"
+            >
+              {isDeletingProtocol ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <span>جاري الحذف...</span>
+                </>
+              ) : (
+                <>
+                  <Trash2 className="w-4 h-4" />
+                  <span>تأكيد الحذف النهائي</span>
+                </>
+              )}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

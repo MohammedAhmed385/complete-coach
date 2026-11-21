@@ -1576,3 +1576,44 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Failed to create protocol" }, { status: 500 });
   }
 }
+
+export async function DELETE(request: NextRequest) {
+  try {
+    const url = new URL(request.url);
+    let id = url.searchParams.get("id");
+    if (!id) {
+      const body = await request.json().catch(() => ({}));
+      id = body.id;
+    }
+    if (!id) {
+      return NextResponse.json({ error: "Protocol ID required" }, { status: 400 });
+    }
+
+    // Remove from inMemoryProtocols
+    const idx = inMemoryProtocols.findIndex((p) => p.id === id);
+    if (idx >= 0) {
+      inMemoryProtocols.splice(idx, 1);
+    }
+
+    if (isDbConfigured()) {
+      try {
+        await prisma.protocolExercise.deleteMany({
+          where: { phase: { protocolId: id } },
+        });
+        await prisma.protocolPhase.deleteMany({
+          where: { protocolId: id },
+        });
+        await prisma.injuryProtocol.delete({
+          where: { id },
+        });
+      } catch (err) {
+        console.warn("DB protocol delete skipped:", err);
+      }
+    }
+
+    return NextResponse.json({ success: true, deleted: id });
+  } catch (error) {
+    console.error("Delete protocol error:", error);
+    return NextResponse.json({ error: "Failed to delete protocol" }, { status: 500 });
+  }
+}
