@@ -70,6 +70,7 @@ import {
   TableCell,
 } from "@/components/ui/table";
 import { cn, formatDate, generateWhatsAppLink } from "@/lib/utils";
+import { AdminGuard } from "@/components/auth/AdminGuard";
 
 // ── TypeScript Types ──
 
@@ -174,6 +175,14 @@ const INITIAL_HOURS: OnlineHour[] = [
 ];
 
 export default function OnlineFollowUpPage() {
+  return (
+    <AdminGuard>
+      <OnlineFollowUpContent />
+    </AdminGuard>
+  );
+}
+
+function OnlineFollowUpContent() {
   // ── States ──
   const [patients, setPatients] = useState<PatientRecord[]>([]);
   const [consultations, setConsultations] = useState<Consultation[]>([]);

@@ -53,6 +53,7 @@ import {
   TableCell,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
+import { AdminGuard } from "@/components/auth/AdminGuard";
 
 // --- Types ---
 type TimeRange = "24h" | "7d" | "30d" | "90d";
@@ -217,6 +218,14 @@ function formatDuration(seconds: number): string {
 }
 
 export default function AnalyticsPage() {
+  return (
+    <AdminGuard>
+      <AnalyticsContent />
+    </AdminGuard>
+  );
+}
+
+function AnalyticsContent() {
   const [timeRange, setTimeRange] = useState<TimeRange>("7d");
   const [data, setData] = useState<AnalyticsData | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);

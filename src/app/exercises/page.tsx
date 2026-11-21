@@ -52,6 +52,7 @@ import { Label } from "@/components/ui/label";
 
 import { cn, getRegionLabel, truncate, generateWhatsAppShareLink } from "@/lib/utils";
 import { useAuth } from "@/lib/auth-context";
+import { AdminGuard } from "@/components/auth/AdminGuard";
 
 // --- TYPES ---
 export type ExerciseRegion = "UPPER" | "LOWER" | "CORE" | "FULL_BODY";
@@ -106,6 +107,14 @@ const COMMON_CATEGORIES = [
 const STANDARD_ISOMETRIC_ANGLES = [0, 30, 45, 60, 90];
 
 export default function ExercisesPage() {
+  return (
+    <AdminGuard>
+      <ExercisesContent />
+    </AdminGuard>
+  );
+}
+
+function ExercisesContent() {
   const { isAdmin } = useAuth();
 
   // --- STATE: Data ---

@@ -40,6 +40,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/lib/auth-context";
 import { getPhaseLabel } from "@/lib/utils";
+import ContactPage from "./contact/page";
 
 // ── TYPES ──
 
@@ -80,6 +81,10 @@ interface ExerciseItem {
 
 export default function HomePage() {
   const { user, isAdmin, loginAsAdmin } = useAuth();
+
+  if (!isAdmin) {
+    return <ContactPage />;
+  }
 
   const effectiveIsAdmin = isAdmin;
 

@@ -41,6 +41,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { cn, formatDate } from "@/lib/utils";
+import { AdminGuard } from "@/components/auth/AdminGuard";
 
 // ─────────────────────────────────────────────────────────────
 // TYPES & INTERFACES
@@ -115,6 +116,14 @@ const DEMO_VIDEOS = [
 ];
 
 export default function AIAnalysisPage() {
+  return (
+    <AdminGuard>
+      <AIAnalysisContent />
+    </AdminGuard>
+  );
+}
+
+function AIAnalysisContent() {
   // ── Patients & Selection ──
   const [patients, setPatients] = useState<PatientSummary[]>([]);
   const [selectedPatientId, setSelectedPatientId] = useState<string>("");

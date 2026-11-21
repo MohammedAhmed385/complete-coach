@@ -49,6 +49,7 @@ import {
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { cn, truncate, getPhaseLabel } from "@/lib/utils";
+import { AdminGuard } from "@/components/auth/AdminGuard";
 
 // ═══════════════════════════════════════════════
 // TYPES
@@ -192,6 +193,14 @@ const RTS_CRITERIA_ITEMS = [
 // ═══════════════════════════════════════════════
 
 export default function ProtocolsPage() {
+  return (
+    <AdminGuard>
+      <ProtocolsContent />
+    </AdminGuard>
+  );
+}
+
+function ProtocolsContent() {
   // Data state
   const [protocols, setProtocols] = useState<ProtocolItem[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);

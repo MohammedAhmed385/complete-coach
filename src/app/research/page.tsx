@@ -28,6 +28,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { cn, generateWhatsAppShareLink, formatDateShort } from "@/lib/utils";
+import { AdminGuard } from "@/components/auth/AdminGuard";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -93,6 +94,14 @@ const PAGE_SIZE = 10;
 // ── Component ────────────────────────────────────────────────────────
 
 export default function ResearchPage() {
+  return (
+    <AdminGuard>
+      <ResearchContent />
+    </AdminGuard>
+  );
+}
+
+function ResearchContent() {
   // Search & Filter States
   const [query, setQuery] = useState("ACL Rehabilitation");
   const [selectedTopic, setSelectedTopic] = useState<string>("ACL Rehabilitation");

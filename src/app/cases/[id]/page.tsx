@@ -84,6 +84,7 @@ import {
   getPhaseLabel,
   getJointLabel,
 } from "@/lib/utils";
+import { AdminGuard } from "@/components/auth/AdminGuard";
 
 // TypeScript Interfaces for Patient Details
 interface ROMMeasurementItem {
@@ -296,6 +297,14 @@ const RECURRING_DAYS_MAP: Record<string, string> = {
 };
 
 export default function PatientDetailPage() {
+  return (
+    <AdminGuard>
+      <PatientDetailPageContent />
+    </AdminGuard>
+  );
+}
+
+function PatientDetailPageContent() {
   const params = useParams();
   const router = useRouter();
   const id = params?.id as string;

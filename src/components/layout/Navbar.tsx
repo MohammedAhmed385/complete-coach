@@ -40,13 +40,8 @@ const adminNavItems = [
   { label: "تواصل معنا", labelEn: "Contact", href: "/contact", icon: PhoneCall },
 ];
 
-// Client-only navigation items (clean, view-only, focused)
+// Client-only navigation items (strictly Contact Us only as requested)
 const clientNavItems = [
-  { label: "الرئيسية (الحالات والتمارين)", labelEn: "Cases & Exercises", href: "/", icon: FolderHeart },
-  { label: "بروتوكولات الإصابات", labelEn: "Protocols", href: "/protocols", icon: FileHeart },
-  { label: "الأبحاث والمقالات", labelEn: "Research", href: "/research", icon: Search },
-  { label: "شروط النزول للملعب", labelEn: "RTP", href: "/return-to-play", icon: CheckCircle2 },
-  { label: "المتابعة أونلاين", labelEn: "Online", href: "/online-followup", icon: Video },
   { label: "تواصل معنا", labelEn: "Contact", href: "/contact", icon: PhoneCall },
 ];
 
@@ -65,7 +60,7 @@ export function Navbar() {
           <div className="flex items-center justify-between h-16">
 
             {/* Right Side: Logo & Brand */}
-            <Link href="/" className="flex items-center gap-2.5 shrink-0 group">
+            <Link href={isAdmin ? "/" : "/contact"} className="flex items-center gap-2.5 shrink-0 group">
               <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-emerald-500 to-teal-400 flex items-center justify-center shadow-md shadow-emerald-500/20 group-hover:scale-105 transition-transform">
                 <Activity className="w-5 h-5 text-white" />
               </div>
@@ -74,7 +69,7 @@ export function Navbar() {
                   Revive
                 </span>
                 <span className="block text-emerald-400 text-[10px] font-medium -mt-0.5">
-                  إدارة الحالات والبرامج التأهيلية
+                  {isAdmin ? "إدارة الحالات والبرامج التأهيلية" : "مركز التواصل والدعم التأهيلي"}
                 </span>
               </div>
             </Link>

@@ -58,6 +58,7 @@ import {
   generateWhatsAppShareLink,
   getPhaseLabel,
 } from "@/lib/utils";
+import { AdminGuard } from "@/components/auth/AdminGuard";
 import { useAuth } from "@/lib/auth-context";
 
 // TypeScript interfaces for Cases and Appointments
@@ -128,6 +129,14 @@ const RECURRING_DAYS = [
 ];
 
 export default function CasesPage() {
+  return (
+    <AdminGuard>
+      <CasesContent />
+    </AdminGuard>
+  );
+}
+
+function CasesContent() {
   const { isAdmin } = useAuth();
 
   // State

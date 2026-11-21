@@ -48,6 +48,7 @@ import {
   FileCheck,
 } from "lucide-react";
 import { cn, formatDate, getPhaseLabel } from "@/lib/utils";
+import { AdminGuard } from "@/components/auth/AdminGuard";
 
 // ── TYPES ──
 
@@ -723,6 +724,14 @@ function CircularReadinessGauge({
 // ── MAIN RETURN-TO-PLAY PAGE ──
 
 export default function ReturnToPlayPage() {
+  return (
+    <AdminGuard>
+      <ReturnToPlayContent />
+    </AdminGuard>
+  );
+}
+
+function ReturnToPlayContent() {
   // State
   const [patients, setPatients] = useState<PatientCase[]>([]);
   const [selectedPatientId, setSelectedPatientId] = useState<string>("");
