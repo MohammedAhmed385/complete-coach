@@ -181,27 +181,18 @@ export default function AdminPage() {
             </p>
           </div>
 
-          <div className="pt-2 space-y-2">
-            {[
-              { email: "yoseefyossefyoseef@gmail.com", label: "دخول كمدير: كابتن يوسف" },
-              { email: "hsksjsgutt@gmail.com", label: "دخول كمدير: hsksjsgutt" },
-              { email: "atfm03716@gmail.com", label: "دخول كمدير: atfm03716" },
-            ].map((adm) => (
-              <Button
-                key={adm.email}
-                onClick={() => {
-                  loginAsAdmin(adm.email);
-                }}
-                className="w-full h-11 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 font-black gap-2 text-xs shadow-md"
-              >
-                <ShieldCheck className="w-4 h-4" />
-                <span>{adm.label}</span>
-              </Button>
-            ))}
+          <div className="pt-2 space-y-3">
+            <Link
+              href="/login"
+              className="w-full h-11 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 font-black gap-2 text-xs shadow-md flex items-center justify-center transition-all"
+            >
+              <ShieldCheck className="w-4 h-4" />
+              <span>تسجيل الدخول بحساب الإدارة</span>
+            </Link>
 
             <Link
               href="/"
-              className="block pt-2 text-xs font-semibold text-slate-500 hover:text-slate-800 transition-colors"
+              className="block pt-1 text-xs font-semibold text-slate-500 hover:text-slate-800 transition-colors"
             >
               العودة للرئيسية (واجهة العميل)
             </Link>

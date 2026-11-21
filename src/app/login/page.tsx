@@ -11,55 +11,68 @@ import {
   Activity,
   Lock,
   Mail,
-  Sparkles,
-  KeyRound,
+  AlertCircle,
 } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { useAuth, ADMIN_EMAILS, getAdminDisplayName } from "@/lib/auth-context";
+import { useAuth } from "@/lib/auth-context";
 
 export default function LoginPage() {
   const router = useRouter();
-  const { user, isAdmin, signInWithGoogle, loginAsAdmin, loginAsClient, logout } = useAuth();
+  const { user, isAdmin, signInWithGoogle, loginWithCredentials, logout } = useAuth();
 
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [message, setMessage] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
 
   const handleGoogleSignIn = async () => {
     setIsLoading(true);
-    setMessage("");
+    setErrorMessage("");
+    setSuccessMessage("");
+
     try {
       await signInWithGoogle();
-      setMessage("جاري التحقق عبر حساب Google / Gmail...");
-      setTimeout(() => {
-        router.push("/");
-      }, 1000);
+      setSuccessMessage("جاري المتابعة بحساب Google...");
     } catch {
+      // If external Google OAuth is not configured with Client ID yet,
+      // guide the user seamlessly to enter their Gmail in the form
+      setErrorMessage("يرجى إدخال بريد Google / Gmail وكلمة المرور في الحقول أدناه للمتابعة.");
       setIsLoading(false);
     }
   };
 
-  const handleAdminDirectLogin = (adminEmail: string) => {
-    setIsLoading(true);
-    loginAsAdmin(adminEmail);
-    setMessage(`تم تسجيل الدخول بنجاح كمدير للنظام (${adminEmail})`);
-    setTimeout(() => {
-      router.push("/");
-    }, 800);
-  };
-
-  const handleEmailSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email.trim()) return;
+    setErrorMessage("");
+    setSuccessMessage("");
+
+    if (!email.trim()) {
+      setErrorMessage("يرجى إدخال البريد الإلكتروني");
+      return;
+    }
+
     setIsLoading(true);
-    loginAsClient(email.trim());
-    setMessage("تم تسجيل الدخول بنجاح.");
-    setTimeout(() => {
-      router.push("/");
-    }, 800);
+    try {
+      const result = await loginWithCredentials(email.trim(), password);
+      if (!result.success) {
+        setErrorMessage(result.error || "تعذر تسجيل الدخول، يرجى التحقق من البيانات.");
+        setIsLoading(false);
+        return;
+      }
+
+      setSuccessMessage("تم تسجيل الدخول بنجاح! جاري توجيهك...");
+      setTimeout(() => {
+        router.push("/");
+      }, 700);
+    } catch {
+      setErrorMessage("حدث خطأ أثناء تسجيل الدخول");
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -82,10 +95,10 @@ export default function LoginPage() {
             </div>
           </Link>
           <h2 className="mt-4 text-2xl font-black text-white">
-            تسجيل الدخول وإدارة المنصة
+            تسجيل الدخول
           </h2>
           <p className="mt-1 text-xs text-slate-400">
-            سجّل دخولك بحساب Google / Gmail المعتمد للوصول لكامل الصلاحيات
+            أدخل بيانات حسابك للمتابعة والوصول للمنصة
           </p>
         </div>
 
@@ -97,14 +110,14 @@ export default function LoginPage() {
               <span>مرحباً، {user.name}</span>
               {isAdmin && (
                 <Badge className="bg-amber-400 text-slate-950 text-[10px] font-bold">
-                  مدير معتمد (Admin)
+                  مدير النظام
                 </Badge>
               )}
             </div>
             <div className="text-xs text-slate-400 mb-3">{user.email}</div>
             <div className="flex items-center justify-center gap-4 mt-2">
               <Link href="/" className="text-xs text-emerald-400 hover:underline font-bold">
-                لوحة الإدارة والتحكم ←
+                الذهاب للوحة التحكم ←
               </Link>
               <button
                 onClick={logout}
@@ -117,16 +130,24 @@ export default function LoginPage() {
         )}
 
         {/* Success Alert */}
-        {message && (
+        {successMessage && (
           <div className="p-3.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs text-center flex items-center justify-center gap-2 animate-fade-in">
             <CheckCircle2 className="w-4 h-4 shrink-0" />
-            <span>{message}</span>
+            <span>{successMessage}</span>
           </div>
         )}
 
-        {/* Login Card */}
+        {/* Error Alert */}
+        {errorMessage && (
+          <div className="p-3.5 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs text-center flex items-center justify-center gap-2 animate-fade-in">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{errorMessage}</span>
+          </div>
+        )}
+
+        {/* Secure Login Card */}
         <Card className="border-slate-800 bg-slate-900/90 shadow-2xl">
-          <CardContent className="space-y-5 pt-6">
+          <CardContent className="space-y-4 pt-6">
 
             {/* Google OAuth Button */}
             <div>
@@ -159,85 +180,50 @@ export default function LoginPage() {
               </Button>
             </div>
 
-            {/* Authorized Admin Direct Sign-In Section */}
-            <div className="space-y-2 pt-2">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-amber-400 flex items-center gap-1.5">
-                  <ShieldCheck className="w-4 h-4" />
-                  <span>دخول حسابات إدارة العيادة المعتمدة:</span>
-                </span>
-                <span className="text-[10px] text-slate-400 font-mono">3 Admin Gmails</span>
-              </div>
-
-              <div className="space-y-2">
-                {[
-                  {
-                    email: "yoseefyossefyoseef@gmail.com",
-                    title: "كابتن يوسف (المدير الأساسي)",
-                    badge: "Primary Admin",
-                  },
-                  {
-                    email: "hsksjsgutt@gmail.com",
-                    title: "المدير المساعد 1",
-                    badge: "Authorized",
-                  },
-                  {
-                    email: "atfm03716@gmail.com",
-                    title: "المدير المساعد 2",
-                    badge: "Authorized",
-                  },
-                ].map((item) => (
-                  <button
-                    key={item.email}
-                    type="button"
-                    onClick={() => handleAdminDirectLogin(item.email)}
-                    disabled={isLoading}
-                    className="w-full text-right p-3 rounded-xl bg-slate-800/70 hover:bg-slate-800 border border-slate-700/80 hover:border-amber-400/60 transition-all flex items-center justify-between group"
-                  >
-                    <div className="space-y-0.5">
-                      <div className="flex items-center gap-2">
-                        <KeyRound className="w-3.5 h-3.5 text-amber-400" />
-                        <span className="text-xs font-bold text-white group-hover:text-amber-300 transition-colors">
-                          {item.title}
-                        </span>
-                      </div>
-                      <div className="text-[11px] text-slate-400 font-mono text-left dir-ltr">
-                        {item.email}
-                      </div>
-                    </div>
-                    <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-300 border-amber-500/30">
-                      دخول مباشر ←
-                    </Badge>
-                  </button>
-                ))}
-              </div>
-            </div>
-
             <div className="relative flex items-center justify-center my-3">
               <div className="border-t border-slate-800 w-full" />
-              <span className="bg-slate-900 px-3 text-[11px] text-slate-500 font-medium">أو عبر بريد إلكتروني مخصص</span>
+              <span className="bg-slate-900 px-3 text-[11px] text-slate-500 font-medium">أو عبر البريد الإلكتروني</span>
               <div className="border-t border-slate-800 w-full" />
             </div>
 
-            {/* Email Input Form */}
-            <form onSubmit={handleEmailSubmit} className="space-y-3">
+            {/* Standard Email & Password Form */}
+            <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-1.5">
+                <Label className="text-xs text-slate-300 font-semibold flex items-center gap-1.5">
+                  <Mail className="w-3.5 h-3.5 text-slate-400" />
+                  <span>البريد الإلكتروني</span>
+                </Label>
                 <Input
                   type="email"
                   required
                   placeholder="name@gmail.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="bg-slate-800/80 border-slate-700 text-white text-xs text-left dir-ltr rounded-xl h-11 placeholder:text-slate-500"
+                  className="bg-slate-800/80 border-slate-700 text-white text-xs text-left dir-ltr rounded-xl h-11 placeholder:text-slate-500 focus:border-emerald-500"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs text-slate-300 font-semibold flex items-center gap-1.5">
+                  <Lock className="w-3.5 h-3.5 text-slate-400" />
+                  <span>كلمة المرور</span>
+                </Label>
+                <Input
+                  type="password"
+                  required
+                  placeholder="••••••••"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="bg-slate-800/80 border-slate-700 text-white text-xs text-left dir-ltr rounded-xl h-11 placeholder:text-slate-500 focus:border-emerald-500"
                 />
               </div>
 
               <Button
                 type="submit"
-                disabled={isLoading || !email.trim()}
-                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs h-11 rounded-xl shadow-md shadow-emerald-600/20"
+                disabled={isLoading || !email.trim() || !password.trim()}
+                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs h-11 rounded-xl shadow-md shadow-emerald-600/20 transition-all"
               >
-                تسجيل الدخول بالبريد
+                {isLoading ? "جاري التحقق..." : "تسجيل الدخول"}
               </Button>
             </form>
 

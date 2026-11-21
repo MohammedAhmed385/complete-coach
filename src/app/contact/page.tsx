@@ -514,31 +514,17 @@ export default function ContactPage() {
               </div>
             </Card>
 
-            {/* Admin Gmail Users List Card */}
+            {/* Clinic Location & Emergency Support */}
             <Card className="rounded-2xl border-slate-200 shadow-md bg-white p-6 space-y-3">
               <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
-                <ShieldCheck className="w-4 h-4 text-amber-500" />
-                <span>عناوين إدارة المنصة المعتمدة:</span>
+                <MapPin className="w-4 h-4 text-emerald-600" />
+                <span>مقر العيادة والدعم الفوري:</span>
               </h3>
-
-              <div className="space-y-2">
-                {[
-                  { email: "yoseefyossefyoseef@gmail.com", role: "المدير الأساسي (كابتن يوسف)" },
-                  { email: "hsksjsgutt@gmail.com", role: "مدير معتمد" },
-                  { email: "atfm03716@gmail.com", role: "مدير معتمد" },
-                ].map((admin) => (
-                  <div key={admin.email} className="p-2.5 rounded-xl bg-slate-50 border border-slate-100 text-xs space-y-0.5">
-                    <div className="font-bold text-slate-800 flex items-center justify-between">
-                      <span>{admin.role}</span>
-                      <Badge variant="outline" className="text-[9px] bg-white border-slate-200">
-                        Admin
-                      </Badge>
-                    </div>
-                    <div className="text-[11px] text-slate-500 font-mono text-left dir-ltr truncate">
-                      {admin.email}
-                    </div>
-                  </div>
-                ))}
+              <p className="text-xs text-slate-600 leading-relaxed">
+                العيادة مجهزة بأحدث أدوات قياس المدى الحركي وأجهزة تقييم إصابات الملاعب. نرحب بكم بالحجز المسبق لضمان الخصوصية والراحة.
+              </p>
+              <div className="p-2.5 rounded-xl bg-emerald-50 text-[11px] text-emerald-800 font-medium">
+                ✅ يتم استلام الردود والإشعارات الطبية مباشرة عبر فريقنا التأهيلي
               </div>
             </Card>
 
