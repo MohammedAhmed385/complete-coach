@@ -618,6 +618,24 @@ export default function AddCasePage() {
         );
       }
 
+      const createdPatient = await response.json().catch(() => null);
+
+      if (typeof window !== "undefined") {
+        try {
+          const localCases = JSON.parse(localStorage.getItem("revive_cases") || "[]");
+          const caseToStore = createdPatient || {
+            id: `case-${Date.now()}`,
+            ...payload,
+            status: "active",
+            createdAt: new Date().toISOString(),
+          };
+          const updated = [caseToStore, ...localCases.filter((c: any) => c.id !== caseToStore.id)];
+          localStorage.setItem("revive_cases", JSON.stringify(updated));
+        } catch (e) {
+          console.warn("localStorage save skipped:", e);
+        }
+      }
+
       setSuccessMessage("تم حفظ الحالة والقياسات بنجاح! جاري التوجيه إلى قائمة الحالات...");
       setTimeout(() => {
         router.push("/cases");

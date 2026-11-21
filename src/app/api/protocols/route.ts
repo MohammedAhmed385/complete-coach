@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import prisma from "@/lib/db";
+import prisma, { isDbConfigured } from "@/lib/db";
 
 // Pre-seeded medical protocols for Peak Motion
 const PRESEEDED_PROTOCOLS = [
@@ -1424,32 +1424,33 @@ export async function GET(request: NextRequest) {
   try {
     const search = request.nextUrl.searchParams.get("search")?.toLowerCase().trim() || "";
 
-    // Attempt to query database if connected
+    // Attempt to query database if configured
     let protocols: any[] = [];
-    try {
-      const where: Record<string, unknown> = {};
-      if (search) {
-        where.OR = [
-          { nameAr: { contains: search, mode: "insensitive" } },
-          { nameEn: { contains: search, mode: "insensitive" } },
-        ];
-      }
+    if (isDbConfigured()) {
+      try {
+        const where: Record<string, unknown> = {};
+        if (search) {
+          where.OR = [
+            { nameAr: { contains: search, mode: "insensitive" } },
+            { nameEn: { contains: search, mode: "insensitive" } },
+          ];
+        }
 
-      protocols = await prisma.injuryProtocol.findMany({
-        where,
-        include: {
-          phases: {
-            include: {
-              exercises: { include: { exercise: true } },
+        protocols = await prisma.injuryProtocol.findMany({
+          where,
+          include: {
+            phases: {
+              include: {
+                exercises: { include: { exercise: true } },
+              },
+              orderBy: { orderIndex: "asc" },
             },
-            orderBy: { orderIndex: "asc" },
           },
-        },
-        orderBy: { nameAr: "asc" },
-      });
-    } catch {
-      // Prisma query failed or not configured, proceed to fallback
-      protocols = [];
+          orderBy: { nameAr: "asc" },
+        });
+      } catch {
+        protocols = [];
+      }
     }
 
     // If database returned results, return them
@@ -1486,88 +1487,90 @@ export async function POST(request: NextRequest) {
       ? body.redFlags
       : JSON.stringify([]);
 
-    // Attempt database creation if available
-    try {
-      const protocol = await prisma.injuryProtocol.create({
-        data: {
-          nameAr: body.nameAr,
-          nameEn: body.nameEn,
-          overviewAr: body.overviewAr || null,
-          overviewEn: body.overviewEn || null,
-          rehabPrinciples: body.rehabPrinciples || null,
-          redFlags: redFlagsData,
-          isCustom: true,
-          phases: {
-            create:
-              body.phases?.map(
-                (
-                  phase: {
-                    phase: string;
-                    durationWeeks: string;
-                    goals: string[] | string;
-                    criteria: string[] | string;
-                  },
-                  idx: number
-                ) => ({
-                  phase: phase.phase as any,
-                  durationWeeks: phase.durationWeeks || null,
-                  goals: Array.isArray(phase.goals) ? JSON.stringify(phase.goals) : phase.goals || null,
-                  criteria: Array.isArray(phase.criteria) ? JSON.stringify(phase.criteria) : phase.criteria || null,
-                  orderIndex: idx,
-                })
-              ) || [],
-          },
-        },
-        include: {
-          phases: {
-            include: {
-              exercises: { include: { exercise: true } },
+    const newProtocol = {
+      id: `custom-proto-${Date.now()}`,
+      nameAr: body.nameAr,
+      nameEn: body.nameEn,
+      overviewAr: body.overviewAr || null,
+      overviewEn: body.overviewEn || null,
+      rehabPrinciples: body.rehabPrinciples || null,
+      redFlags: redFlagsData,
+      isCustom: true,
+      createdAt: new Date().toISOString(),
+      phases:
+        body.phases?.map(
+          (
+            phase: {
+              phase: string;
+              durationWeeks: string;
+              goals: string[] | string;
+              criteria: string[] | string;
+              exercises?: any[];
+            },
+            idx: number
+          ) => ({
+            id: `phase-custom-${Date.now()}-${idx}`,
+            phase: phase.phase,
+            durationWeeks: phase.durationWeeks || null,
+            goals: Array.isArray(phase.goals) ? JSON.stringify(phase.goals) : phase.goals || "[]",
+            criteria: Array.isArray(phase.criteria) ? JSON.stringify(phase.criteria) : phase.criteria || "[]",
+            orderIndex: idx,
+            exercises: phase.exercises || [],
+          })
+        ) || [],
+    };
+
+    inMemoryProtocols.unshift(newProtocol as any);
+
+    // Attempt database creation if configured
+    if (isDbConfigured()) {
+      try {
+        const protocol = await prisma.injuryProtocol.create({
+          data: {
+            nameAr: body.nameAr,
+            nameEn: body.nameEn,
+            overviewAr: body.overviewAr || null,
+            overviewEn: body.overviewEn || null,
+            rehabPrinciples: body.rehabPrinciples || null,
+            redFlags: redFlagsData,
+            isCustom: true,
+            phases: {
+              create:
+                body.phases?.map(
+                  (
+                    phase: {
+                      phase: string;
+                      durationWeeks: string;
+                      goals: string[] | string;
+                      criteria: string[] | string;
+                    },
+                    idx: number
+                  ) => ({
+                    phase: phase.phase as any,
+                    durationWeeks: phase.durationWeeks || null,
+                    goals: Array.isArray(phase.goals) ? JSON.stringify(phase.goals) : phase.goals || null,
+                    criteria: Array.isArray(phase.criteria) ? JSON.stringify(phase.criteria) : phase.criteria || null,
+                    orderIndex: idx,
+                  })
+                ) || [],
             },
           },
-        },
-      });
-
-      // Keep in-memory in sync
-      inMemoryProtocols.unshift(protocol as any);
-      return NextResponse.json(protocol, { status: 201 });
-    } catch {
-      // Prisma not available, construct protocol object in memory
-      const newProtocol = {
-        id: `custom-proto-${Date.now()}`,
-        nameAr: body.nameAr,
-        nameEn: body.nameEn,
-        overviewAr: body.overviewAr || null,
-        overviewEn: body.overviewEn || null,
-        rehabPrinciples: body.rehabPrinciples || null,
-        redFlags: redFlagsData,
-        isCustom: true,
-        createdAt: new Date().toISOString(),
-        phases:
-          body.phases?.map(
-            (
-              phase: {
-                phase: string;
-                durationWeeks: string;
-                goals: string[] | string;
-                criteria: string[] | string;
-                exercises?: any[];
+          include: {
+            phases: {
+              include: {
+                exercises: { include: { exercise: true } },
               },
-              idx: number
-            ) => ({
-              id: `phase-custom-${Date.now()}-${idx}`,
-              phase: phase.phase,
-              durationWeeks: phase.durationWeeks || null,
-              goals: Array.isArray(phase.goals) ? JSON.stringify(phase.goals) : phase.goals || "[]",
-              criteria: Array.isArray(phase.criteria) ? JSON.stringify(phase.criteria) : phase.criteria || "[]",
-              orderIndex: idx,
-              exercises: phase.exercises || [],
-            })
-          ) || [],
-      };
+            },
+          },
+        });
 
-      inMemoryProtocols.unshift(newProtocol as any);
-      return NextResponse.json(newProtocol, { status: 201 });
+        return NextResponse.json(protocol, { status: 201 });
+      } catch (err) {
+        console.warn("DB protocol create skipped:", err);
+      }
     }
+
+    return NextResponse.json(newProtocol, { status: 201 });
   } catch (error) {
     console.error("Protocol POST error:", error);
     return NextResponse.json({ error: "Failed to create protocol" }, { status: 500 });

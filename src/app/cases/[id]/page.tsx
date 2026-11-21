@@ -357,6 +357,19 @@ function PatientDetailPageContent() {
     try {
       const res = await fetch(`/api/cases/${id}`);
       if (!res.ok) {
+        // Fallback to localStorage
+        if (typeof window !== "undefined") {
+          try {
+            const localCases = JSON.parse(localStorage.getItem("revive_cases") || "[]");
+            const found = localCases.find((c: any) => c.id === id);
+            if (found) {
+              setPatient(found);
+              initExercisesFromProgram(found);
+              setIsLoading(false);
+              return;
+            }
+          } catch {}
+        }
         if (res.status === 404) {
           throw new Error("لم يتم العثور على سجل المريض المطلوب");
         }

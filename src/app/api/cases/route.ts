@@ -1,49 +1,55 @@
 import { NextRequest, NextResponse } from "next/server";
-import prisma from "@/lib/db";
+import prisma, { isDbConfigured } from "@/lib/db";
 import { getLiveCases, saveLiveCase } from "@/lib/live-store";
 
 // GET — list patients/cases
 export async function GET(request: NextRequest) {
-  const search = request.nextUrl.searchParams.get("search")?.toLowerCase() || "";
+  const search = request.nextUrl.searchParams.get("search")?.toLowerCase().trim() || "";
   const status = request.nextUrl.searchParams.get("status") || "";
 
-  // 1. Try Prisma DB if reachable
-  try {
-    const where: Record<string, unknown> = {};
-    if (search) {
-      where.OR = [
-        { name: { contains: search, mode: "insensitive" } },
-        { injuryType: { contains: search, mode: "insensitive" } },
-      ];
-    }
-    if (status) where.status = status;
+  // 1. Try Prisma DB if configured
+  if (isDbConfigured()) {
+    try {
+      const where: Record<string, unknown> = {};
+      if (search) {
+        where.OR = [
+          { name: { contains: search, mode: "insensitive" } },
+          { injuryType: { contains: search, mode: "insensitive" } },
+        ];
+      }
+      if (status) where.status = status;
 
-    const patients = await prisma.patient.findMany({
-      where,
-      orderBy: { createdAt: "desc" },
-      include: {
-        romMeasurements: { orderBy: { date: "desc" }, take: 5 },
-        rehabPrograms: { where: { isActive: true }, take: 1 },
-        appointments: { orderBy: { date: "desc" }, take: 3 },
-      },
-    });
+      const patients = await prisma.patient.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        include: {
+          romMeasurements: { orderBy: { date: "desc" }, take: 5 },
+          rehabPrograms: { where: { isActive: true }, take: 1 },
+          appointments: { orderBy: { date: "desc" }, take: 3 },
+        },
+      });
 
-    return NextResponse.json(patients);
-  } catch {
-    // 2. Real Live Store (Starts at 0, updates live as user adds/edits cases)
-    let liveCases = getLiveCases();
-    if (search) {
-      liveCases = liveCases.filter(
-        (c) =>
-          c.name.toLowerCase().includes(search) ||
-          c.injuryType.toLowerCase().includes(search)
-      );
+      if (patients && patients.length > 0) {
+        return NextResponse.json(patients);
+      }
+    } catch {
+      // DB failed, fall back
     }
-    if (status) {
-      liveCases = liveCases.filter((c) => c.status === status);
-    }
-    return NextResponse.json(liveCases);
   }
+
+  // 2. Real Live Store
+  let liveCases = getLiveCases();
+  if (search) {
+    liveCases = liveCases.filter(
+      (c) =>
+        c.name.toLowerCase().includes(search) ||
+        c.injuryType.toLowerCase().includes(search)
+    );
+  }
+  if (status) {
+    liveCases = liveCases.filter((c) => c.status === status);
+  }
+  return NextResponse.json(liveCases);
 }
 
 // POST — create patient/case
@@ -53,6 +59,7 @@ export async function POST(request: NextRequest) {
 
     // Save in Live Store first for guaranteed persistence
     const saved = saveLiveCase({
+      id: body.id,
       name: body.name,
       phone: body.phone,
       injuryType: body.injuryType,
@@ -75,31 +82,33 @@ export async function POST(request: NextRequest) {
     });
 
     // Try syncing to DB if reachable
-    try {
-      let userId = body.userId;
-      if (!userId) {
-        const existingUser = await prisma.user.findFirst();
-        userId = existingUser?.id;
+    if (isDbConfigured()) {
+      try {
+        let userId = body.userId;
+        if (!userId) {
+          const existingUser = await prisma.user.findFirst();
+          userId = existingUser?.id;
+        }
+        if (userId) {
+          await prisma.patient.create({
+            data: {
+              id: saved.id,
+              name: body.name,
+              phone: body.phone || null,
+              injuryType: body.injuryType,
+              injuryDate: new Date(body.injuryDate || Date.now()),
+              surgeryDate: body.surgeryDate ? new Date(body.surgeryDate) : null,
+              rehabStartDate: new Date(body.rehabStartDate || Date.now()),
+              injuredSide: body.injuredSide || "RIGHT",
+              mechanismOfInjury: body.mechanismOfInjury || null,
+              notes: body.notes || null,
+              userId: userId,
+            },
+          });
+        }
+      } catch (err) {
+        console.warn("Prisma sync skipped:", err);
       }
-      if (userId) {
-        await prisma.patient.create({
-          data: {
-            id: saved.id,
-            name: body.name,
-            phone: body.phone || null,
-            injuryType: body.injuryType,
-            injuryDate: new Date(body.injuryDate || Date.now()),
-            surgeryDate: body.surgeryDate ? new Date(body.surgeryDate) : null,
-            rehabStartDate: new Date(body.rehabStartDate || Date.now()),
-            injuredSide: body.injuredSide || "RIGHT",
-            mechanismOfInjury: body.mechanismOfInjury || null,
-            notes: body.notes || null,
-            userId: userId,
-          },
-        });
-      }
-    } catch {
-      // DB offline, live store already saved
     }
 
     return NextResponse.json(saved, { status: 201 });

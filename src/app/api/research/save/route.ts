@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import prisma from "@/lib/db";
+import prisma, { isDbConfigured } from "@/lib/db";
+
+// In-memory saved papers
+let memorySavedPapers: any[] = [];
 
 async function getOrCreateDefaultUser(): Promise<string> {
+  if (!isDbConfigured()) return "default-user";
   try {
     const existingUser = await prisma.user.findFirst();
     if (existingUser) return existingUser.id;
@@ -25,18 +29,19 @@ async function getOrCreateDefaultUser(): Promise<string> {
 
 // GET — list saved papers
 export async function GET() {
-  try {
-    const userId = await getOrCreateDefaultUser();
-    const papers = await prisma.savedPaper.findMany({
-      where: { userId },
-      orderBy: { savedAt: "desc" },
-    });
-    return NextResponse.json({ papers });
-  } catch (error) {
-    console.error("Saved papers GET error:", error);
-    // Graceful fallback if database table is not ready
-    return NextResponse.json({ papers: [], error: "Database unavailable" }, { status: 200 });
+  if (isDbConfigured()) {
+    try {
+      const userId = await getOrCreateDefaultUser();
+      const papers = await prisma.savedPaper.findMany({
+        where: { userId },
+        orderBy: { savedAt: "desc" },
+      });
+      return NextResponse.json({ papers });
+    } catch (error) {
+      console.warn("Saved papers GET fallback to memory:", error);
+    }
   }
+  return NextResponse.json({ papers: memorySavedPapers });
 }
 
 // POST — save or toggle paper
@@ -49,29 +54,29 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "PMID required" }, { status: 400 });
     }
 
-    const userId = await getOrCreateDefaultUser();
+    const pmidStr = String(pmid);
 
-    // Check if paper already saved
-    const existing = await prisma.savedPaper.findFirst({
-      where: { userId, pmid: String(pmid) },
-    });
-
-    if (action === "unsave" || (existing && action === "toggle")) {
-      if (existing) {
-        await prisma.savedPaper.delete({
-          where: { id: existing.id },
-        });
+    if (action === "unsave") {
+      memorySavedPapers = memorySavedPapers.filter((p) => String(p.pmid) !== pmidStr);
+      if (isDbConfigured()) {
+        try {
+          const userId = await getOrCreateDefaultUser();
+          await prisma.savedPaper.deleteMany({ where: { userId, pmid: pmidStr } });
+        } catch {}
       }
-      return NextResponse.json({ success: true, saved: false, pmid: String(pmid) });
+      return NextResponse.json({ success: true, saved: false, pmid: pmidStr });
     }
 
-    if (existing) {
-      return NextResponse.json({
-        success: true,
-        saved: true,
-        paper: existing,
-        message: "Paper already saved",
-      });
+    const existingMemIndex = memorySavedPapers.findIndex((p) => String(p.pmid) === pmidStr);
+    if (action === "toggle" && existingMemIndex >= 0) {
+      memorySavedPapers.splice(existingMemIndex, 1);
+      if (isDbConfigured()) {
+        try {
+          const userId = await getOrCreateDefaultUser();
+          await prisma.savedPaper.deleteMany({ where: { userId, pmid: pmidStr } });
+        } catch {}
+      }
+      return NextResponse.json({ success: true, saved: false, pmid: pmidStr });
     }
 
     const authorsString = Array.isArray(authors)
@@ -80,20 +85,49 @@ export async function POST(request: NextRequest) {
       ? authors
       : "";
 
-    const savedPaper = await prisma.savedPaper.create({
-      data: {
-        userId,
-        pmid: String(pmid),
-        title: title || "بدون عنوان",
-        authors: authorsString,
-        journal: journal || "",
-        pubDate: pubDate || "",
-        doi: doi || "",
-        abstract: abstract || "",
-      },
-    });
+    const paperObj = {
+      id: `paper-${Date.now()}`,
+      pmid: pmidStr,
+      title: title || "بدون عنوان",
+      authors: authorsString,
+      journal: journal || "",
+      pubDate: pubDate || "",
+      doi: doi || "",
+      abstract: abstract || "",
+      savedAt: new Date().toISOString(),
+    };
 
-    return NextResponse.json({ success: true, saved: true, paper: savedPaper }, { status: 201 });
+    if (existingMemIndex === -1) {
+      memorySavedPapers.unshift(paperObj);
+    }
+
+    if (isDbConfigured()) {
+      try {
+        const userId = await getOrCreateDefaultUser();
+        const existing = await prisma.savedPaper.findFirst({
+          where: { userId, pmid: pmidStr },
+        });
+        if (!existing) {
+          const savedPaper = await prisma.savedPaper.create({
+            data: {
+              userId,
+              pmid: pmidStr,
+              title: title || "بدون عنوان",
+              authors: authorsString,
+              journal: journal || "",
+              pubDate: pubDate || "",
+              doi: doi || "",
+              abstract: abstract || "",
+            },
+          });
+          return NextResponse.json({ success: true, saved: true, paper: savedPaper }, { status: 201 });
+        }
+      } catch (err) {
+        console.warn("DB savedPaper create skipped:", err);
+      }
+    }
+
+    return NextResponse.json({ success: true, saved: true, paper: paperObj }, { status: 201 });
   } catch (error) {
     console.error("Save paper POST error:", error);
     return NextResponse.json({ error: "Failed to save paper" }, { status: 500 });
@@ -110,16 +144,22 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: "ID or PMID required" }, { status: 400 });
     }
 
-    const userId = await getOrCreateDefaultUser();
-
+    if (pmid) {
+      memorySavedPapers = memorySavedPapers.filter((p) => String(p.pmid) !== String(pmid));
+    }
     if (id) {
-      await prisma.savedPaper.deleteMany({
-        where: { id, userId },
-      });
-    } else if (pmid) {
-      await prisma.savedPaper.deleteMany({
-        where: { pmid, userId },
-      });
+      memorySavedPapers = memorySavedPapers.filter((p) => p.id !== id);
+    }
+
+    if (isDbConfigured()) {
+      try {
+        const userId = await getOrCreateDefaultUser();
+        if (id) {
+          await prisma.savedPaper.deleteMany({ where: { id, userId } });
+        } else if (pmid) {
+          await prisma.savedPaper.deleteMany({ where: { pmid: String(pmid), userId } });
+        }
+      } catch {}
     }
 
     return NextResponse.json({ success: true });

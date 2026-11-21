@@ -285,11 +285,35 @@ function ProtocolsContent() {
         ? `/api/protocols?search=${encodeURIComponent(query)}`
         : "/api/protocols";
       const res = await fetch(url);
-      if (!res.ok) {
-        throw new Error(`تعذر جلب البروتوكولات (Status: ${res.status})`);
+      let serverProtocols: ProtocolItem[] = [];
+      if (res.ok) {
+        const data = await res.json();
+        serverProtocols = Array.isArray(data) ? data : [];
       }
-      const data: ProtocolItem[] = await res.json();
-      setProtocols(data);
+
+      let localProtocols: ProtocolItem[] = [];
+      if (typeof window !== "undefined") {
+        try {
+          localProtocols = JSON.parse(localStorage.getItem("revive_custom_protocols") || "[]");
+        } catch {}
+      }
+
+      if (query.trim()) {
+        const q = query.toLowerCase();
+        localProtocols = localProtocols.filter(
+          (p) =>
+            p.nameAr.toLowerCase().includes(q) ||
+            p.nameEn.toLowerCase().includes(q) ||
+            p.overviewAr?.toLowerCase().includes(q)
+        );
+      }
+
+      const map = new Map<string, ProtocolItem>();
+      [...localProtocols, ...serverProtocols].forEach((p) => {
+        if (p && p.id) map.set(p.id, p);
+      });
+
+      setProtocols(Array.from(map.values()));
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "حدث خطأ غير متوقع أثناء تحميل البيانات";
       console.error("Fetch protocols error:", err);
@@ -576,6 +600,22 @@ function ProtocolsContent() {
 
       if (!res.ok) {
         throw new Error("فشل إنشاء البروتوكول عبر الخادم");
+      }
+
+      const createdProto = await res.json().catch(() => null);
+
+      if (typeof window !== "undefined") {
+        try {
+          const localProtocols = JSON.parse(localStorage.getItem("revive_custom_protocols") || "[]");
+          const protoToStore = createdProto || {
+            id: `custom-proto-${Date.now()}`,
+            ...payload,
+            isCustom: true,
+            createdAt: new Date().toISOString(),
+          };
+          const updated = [protoToStore, ...localProtocols.filter((p: any) => p.id !== protoToStore.id)];
+          localStorage.setItem("revive_custom_protocols", JSON.stringify(updated));
+        } catch {}
       }
 
       // Reset form & close dialog

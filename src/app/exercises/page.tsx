@@ -200,8 +200,22 @@ function ExercisesContent() {
       if (!res.ok) {
         throw new Error("فشل في تحميل قائمة التمارين");
       }
-      const data: Exercise[] = await res.json();
-      setExercises(data);
+      const data = await res.json();
+      const serverList: Exercise[] = Array.isArray(data) ? data : (data.exercises || []);
+
+      let localCustom: Exercise[] = [];
+      if (typeof window !== "undefined") {
+        try {
+          localCustom = JSON.parse(localStorage.getItem("revive_custom_exercises") || "[]");
+        } catch {}
+      }
+
+      const map = new Map<string, Exercise>();
+      [...localCustom, ...serverList].forEach((ex) => {
+        if (ex && ex.id) map.set(ex.id, ex);
+      });
+
+      setExercises(Array.from(map.values()));
       setCurrentPage(1); // Reset to page 1 on new filter results
     } catch (err: unknown) {
       console.error("Error fetching exercises:", err);
@@ -320,6 +334,32 @@ function ExercisesContent() {
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
         throw new Error(errorData.error || "فشل في حفظ التمرين");
+      }
+
+      const savedEx = await res.json().catch(() => null);
+
+      if (typeof window !== "undefined") {
+        try {
+          const localCustom = JSON.parse(localStorage.getItem("revive_custom_exercises") || "[]");
+          const exToStore = savedEx || {
+            id: `ex-${Date.now()}`,
+            nameAr: newExercise.nameAr.trim(),
+            nameEn: newExercise.nameEn.trim(),
+            region: newExercise.region,
+            category: categoryToSave,
+            isIsometric: newExercise.isIsometric,
+            isometricAngle: calculatedAngle,
+            instructions: newExercise.instructions.trim() || null,
+            videoUrl: newExercise.videoUrl.trim() || null,
+            youtubeSearch:
+              newExercise.youtubeSearch.trim() ||
+              `${newExercise.nameEn} exercise physical therapy`,
+            isCustom: true,
+            createdAt: new Date().toISOString(),
+          };
+          const updated = [exToStore, ...localCustom.filter((e: any) => e.id !== exToStore.id)];
+          localStorage.setItem("revive_custom_exercises", JSON.stringify(updated));
+        } catch {}
       }
 
       // Reset form and close dialog

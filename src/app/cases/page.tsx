@@ -178,13 +178,40 @@ function CasesContent() {
     setError(null);
     try {
       const res = await fetch("/api/cases");
-      if (!res.ok) {
-        throw new Error("فشل تحميل قائمة الحالات المرضية");
+      let serverData: PatientItem[] = [];
+      if (res.ok) {
+        const data = await res.json();
+        serverData = Array.isArray(data) ? data : [];
       }
-      const data = await res.json();
-      setPatients(Array.isArray(data) ? data : []);
+
+      // Merge with localStorage
+      let localData: PatientItem[] = [];
+      if (typeof window !== "undefined") {
+        try {
+          localData = JSON.parse(localStorage.getItem("revive_cases") || "[]");
+        } catch {}
+      }
+
+      const map = new Map<string, PatientItem>();
+      [...localData, ...serverData].forEach((item) => {
+        if (item && item.id) {
+          map.set(item.id, item);
+        }
+      });
+
+      setPatients(Array.from(map.values()));
     } catch (err: any) {
       console.error("Error fetching cases:", err);
+      // Fallback to local storage if API fails completely
+      if (typeof window !== "undefined") {
+        try {
+          const localData = JSON.parse(localStorage.getItem("revive_cases") || "[]");
+          if (localData.length > 0) {
+            setPatients(localData);
+            return;
+          }
+        } catch {}
+      }
       setError(err.message || "حدث خطأ أثناء تحميل الحالات");
     } finally {
       setIsLoading(false);
@@ -348,7 +375,14 @@ function CasesContent() {
         throw new Error("فشل حذف ملف المريض");
       }
 
-      // Remove from state
+      // Remove from state & localStorage
+      if (typeof window !== "undefined") {
+        try {
+          const localData = JSON.parse(localStorage.getItem("revive_cases") || "[]");
+          const filtered = localData.filter((c: any) => c.id !== patientToDelete.id);
+          localStorage.setItem("revive_cases", JSON.stringify(filtered));
+        } catch {}
+      }
       setPatients((prev) => prev.filter((p) => p.id !== patientToDelete.id));
       setPatientToDelete(null);
       fetchTodayAppointments();
