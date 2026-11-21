@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import Link from "next/link";
 import {
   BarChart3,
   TrendingUp,
@@ -24,6 +25,19 @@ import {
   Compass,
   AlertCircle,
   Laptop,
+  Stethoscope,
+  FolderHeart,
+  CheckCircle2,
+  Dumbbell,
+  FileHeart,
+  UserCheck,
+  UserPlus,
+  Shield,
+  ChevronLeft,
+  ChevronRight,
+  Flame,
+  Award,
+  Sparkles,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -98,6 +112,19 @@ interface TimeSeriesPoint {
   unique: number;
 }
 
+export interface ClinicalStats {
+  totalPatients: number;
+  activePatients: number;
+  completedPatients: number;
+  pausedPatients: number;
+  totalExercises: number;
+  totalProtocols: number;
+  recoveryRate: number;
+  injuryBreakdown: { name: string; count: number; percentage: number }[];
+  phaseBreakdown: Record<string, number>;
+  sideBreakdown: { RIGHT: number; LEFT: number; BILATERAL: number };
+}
+
 interface AnalyticsData {
   kpis: KPIStats;
   topPages: BreakdownItem[];
@@ -107,6 +134,7 @@ interface AnalyticsData {
   countries: BreakdownItem[];
   recentVisits: RecentVisit[];
   timeSeries: TimeSeriesPoint[];
+  clinicalStats?: ClinicalStats;
 }
 
 // --- Page & Route Mappings ---
@@ -228,13 +256,14 @@ export default function AnalyticsPage() {
 function AnalyticsContent() {
   const [timeRange, setTimeRange] = useState<TimeRange>("7d");
   const [data, setData] = useState<AnalyticsData | null>(null);
+  const [activeTab, setActiveTab] = useState<"clinical" | "traffic">("clinical");
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date>(new Date());
   const [mounted, setMounted] = useState<boolean>(false);
 
-  // In-memory persistent session IDs (NO localStorage used)
+  // In-memory persistent session IDs
   const visitorIdRef = useRef<string>("");
   const sessionIdRef = useRef<string>("");
 
@@ -265,6 +294,67 @@ function AnalyticsContent() {
         }
 
         const json: AnalyticsData = await res.json();
+
+        // Merge with client-side localStorage cases
+        if (typeof window !== "undefined") {
+          try {
+            const localCases = JSON.parse(localStorage.getItem("revive_cases") || "[]");
+            if (localCases.length > 0) {
+              const total = localCases.length;
+              const active = localCases.filter((c: any) => c.status === "active").length;
+              const completed = localCases.filter((c: any) => c.status === "completed").length;
+              const paused = localCases.filter((c: any) => c.status === "paused").length;
+
+              const injuryCounts: Record<string, number> = {};
+              localCases.forEach((c: any) => {
+                const t = c.injuryType?.trim() || "إصابة أخرى";
+                injuryCounts[t] = (injuryCounts[t] || 0) + 1;
+              });
+              const injuryBreakdown = Object.entries(injuryCounts)
+                .map(([name, count]) => ({
+                  name,
+                  count,
+                  percentage: Math.round((count / total) * 100),
+                }))
+                .sort((a, b) => b.count - a.count);
+
+              const phaseCounts: Record<string, number> = {
+                ACUTE: 0,
+                RESTORE_ROM: 0,
+                STRENGTH: 0,
+                NEUROMUSCULAR: 0,
+                FUNCTIONAL: 0,
+                RETURN_TO_SPORT: 0,
+              };
+              localCases.forEach((c: any) => {
+                const p = c.rehabPrograms?.[0]?.phase || "ACUTE";
+                if (phaseCounts[p] !== undefined) phaseCounts[p]++;
+                else phaseCounts.ACUTE++;
+              });
+
+              const sideCounts = { RIGHT: 0, LEFT: 0, BILATERAL: 0 };
+              localCases.forEach((c: any) => {
+                if (c.injuredSide === "LEFT") sideCounts.LEFT++;
+                else if (c.injuredSide === "BILATERAL") sideCounts.BILATERAL++;
+                else sideCounts.RIGHT++;
+              });
+
+              json.clinicalStats = {
+                totalPatients: total,
+                activePatients: active,
+                completedPatients: completed,
+                pausedPatients: paused,
+                totalExercises: json.clinicalStats?.totalExercises || 8,
+                totalProtocols: json.clinicalStats?.totalProtocols || 8,
+                recoveryRate: total > 0 ? Math.round((completed / total) * 100) : 0,
+                injuryBreakdown,
+                phaseBreakdown: phaseCounts,
+                sideBreakdown: sideCounts,
+              };
+            }
+          } catch {}
+        }
+
         setData(json);
         setLastRefreshedAt(new Date());
       } catch (err: unknown) {
@@ -410,6 +500,26 @@ function AnalyticsContent() {
     uniqueChange: 0,
   };
 
+  const clinical: ClinicalStats = data?.clinicalStats || {
+    totalPatients: 0,
+    activePatients: 0,
+    completedPatients: 0,
+    pausedPatients: 0,
+    totalExercises: 8,
+    totalProtocols: 8,
+    recoveryRate: 0,
+    injuryBreakdown: [],
+    phaseBreakdown: {
+      ACUTE: 0,
+      RESTORE_ROM: 0,
+      STRENGTH: 0,
+      NEUROMUSCULAR: 0,
+      FUNCTIONAL: 0,
+      RETURN_TO_SPORT: 0,
+    },
+    sideBreakdown: { RIGHT: 0, LEFT: 0, BILATERAL: 0 },
+  };
+
   return (
     <div className="max-w-[1440px] mx-auto px-4 py-8 space-y-8" dir="rtl">
       {/* 1. Header & Controls */}
@@ -517,6 +627,385 @@ function AnalyticsContent() {
           </Button>
         </div>
       )}
+
+      {/* Primary Mode Tabs: Clinical Rehab vs Web Traffic */}
+      <div className="flex flex-wrap items-center gap-2 border-b border-slate-200">
+        <button
+          type="button"
+          onClick={() => setActiveTab("clinical")}
+          className={cn(
+            "flex items-center gap-2.5 py-3.5 px-5 font-bold text-sm border-b-2 transition-all duration-150",
+            activeTab === "clinical"
+              ? "border-emerald-600 text-emerald-800 bg-emerald-50/70 rounded-t-xl"
+              : "border-transparent text-slate-600 hover:text-slate-900 hover:bg-slate-50 rounded-t-xl"
+          )}
+        >
+          <Stethoscope className="w-4 h-4 text-emerald-600" />
+          <span>إحصائيات التأهيل السريري للمرضى</span>
+          <Badge className="bg-emerald-100 text-emerald-800 border-emerald-200 text-xs px-2 py-0.5 font-bold">
+            {clinical.totalPatients} حالة
+          </Badge>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab("traffic")}
+          className={cn(
+            "flex items-center gap-2.5 py-3.5 px-5 font-bold text-sm border-b-2 transition-all duration-150",
+            activeTab === "traffic"
+              ? "border-emerald-600 text-emerald-800 bg-emerald-50/70 rounded-t-xl"
+              : "border-transparent text-slate-600 hover:text-slate-900 hover:bg-slate-50 rounded-t-xl"
+          )}
+        >
+          <Globe className="w-4 h-4 text-blue-600" />
+          <span>إحصائيات تفاعل وزوار الموقع</span>
+          <span className="flex h-2 w-2 relative">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+          </span>
+        </button>
+      </div>
+
+      {activeTab === "clinical" ? (
+        <div className="space-y-8">
+          {/* Clinical KPIs Row */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {/* KPI 1: Total Patients */}
+            <Card className="border border-slate-200 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden bg-white">
+              <div className="absolute top-0 right-0 left-0 h-1 bg-emerald-500" />
+              <CardHeader className="p-5 pb-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-500">إجمالي الحالات السريرية</span>
+                  <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                    <FolderHeart className="w-5 h-5" />
+                  </div>
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono">Total Clinical Cases</p>
+              </CardHeader>
+              <CardContent className="p-5 pt-0">
+                <div className="text-3xl font-black text-navy-950 font-mono tracking-tight">
+                  {clinical.totalPatients}
+                </div>
+                <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
+                  <Badge className="bg-emerald-50 text-emerald-700 border-emerald-200">
+                    {clinical.activePatients} حالة نشطة
+                  </Badge>
+                  <span>ملفات مسجلة بالكامل</span>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* KPI 2: Active In-Rehab */}
+            <Card className="border border-slate-200 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden bg-white">
+              <div className="absolute top-0 right-0 left-0 h-1 bg-blue-500" />
+              <CardHeader className="p-5 pb-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-500">حالات قيد التأهيل النشط</span>
+                  <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
+                    <Activity className="w-5 h-5" />
+                  </div>
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono">Active In-Rehab</p>
+              </CardHeader>
+              <CardContent className="p-5 pt-0">
+                <div className="text-3xl font-black text-blue-900 font-mono tracking-tight">
+                  {clinical.activePatients}
+                </div>
+                <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
+                  <Badge className="bg-blue-50 text-blue-700 border-blue-200">
+                    برامج جارية
+                  </Badge>
+                  <span>متابعة تمارين وجداول أسبوعية</span>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* KPI 3: Recovery & RTP Rate */}
+            <Card className="border border-slate-200 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden bg-white">
+              <div className="absolute top-0 right-0 left-0 h-1 bg-purple-500" />
+              <CardHeader className="p-5 pb-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-500">نسبة التعافي والعودة للملعب</span>
+                  <div className="w-10 h-10 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center">
+                    <CheckCircle2 className="w-5 h-5" />
+                  </div>
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono">Recovery & RTP Rate</p>
+              </CardHeader>
+              <CardContent className="p-5 pt-0">
+                <div className="text-3xl font-black text-purple-900 font-mono tracking-tight">
+                  {clinical.recoveryRate}%
+                </div>
+                <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
+                  <Badge className="bg-purple-50 text-purple-700 border-purple-200">
+                    {clinical.completedPatients} حالة متعافية
+                  </Badge>
+                  <span>اجتازت معايير النزول للملعب</span>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* KPI 4: Exercises & Protocols */}
+            <Card className="border border-slate-200 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden bg-white">
+              <div className="absolute top-0 right-0 left-0 h-1 bg-amber-500" />
+              <CardHeader className="p-5 pb-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-500">المكتبة السريرية المعتمدة</span>
+                  <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center">
+                    <Dumbbell className="w-5 h-5" />
+                  </div>
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono">Exercises & Protocols</p>
+              </CardHeader>
+              <CardContent className="p-5 pt-0">
+                <div className="text-2xl font-black text-amber-900 font-mono tracking-tight">
+                  {clinical.totalExercises} تمرين
+                </div>
+                <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
+                  <Badge className="bg-amber-50 text-amber-700 border-amber-200">
+                    {clinical.totalProtocols} بروتوكولات
+                  </Badge>
+                  <span>قائمة على الأدلة البحثية</span>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Rehabilitation Pipeline Progression */}
+          <Card className="border border-slate-200 shadow-sm bg-white overflow-hidden">
+            <CardHeader className="p-5 border-b border-slate-100 bg-slate-50/50">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <Layers className="w-5 h-5 text-emerald-600" />
+                  <CardTitle className="text-lg font-bold text-navy-950">
+                    مسار مراحل التأهيل الحركي للمرضى (Rehabilitation Pipeline)
+                  </CardTitle>
+                </div>
+                <span className="text-xs text-slate-500 font-medium">
+                  توزيع الحالات عبر المراحل العلاجية الست المعتمدة
+                </span>
+              </div>
+            </CardHeader>
+            <CardContent className="p-5">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
+                {[
+                  {
+                    id: "ACUTE",
+                    nameAr: "المرحلة الحادة",
+                    nameEn: "Acute / Protection",
+                    count: clinical.phaseBreakdown.ACUTE || 0,
+                    color: "border-red-200 bg-red-50/40 text-red-700",
+                    badgeColor: "bg-red-100 text-red-800",
+                    desc: "السيطرة على الألم والتورم وحماية الأنسجة",
+                  },
+                  {
+                    id: "RESTORE_ROM",
+                    nameAr: "استعادة المدى",
+                    nameEn: "Restore ROM",
+                    count: clinical.phaseBreakdown.RESTORE_ROM || 0,
+                    color: "border-amber-200 bg-amber-50/40 text-amber-700",
+                    badgeColor: "bg-amber-100 text-amber-800",
+                    desc: "استعادة بسط وثني المفصل الطبيعي",
+                  },
+                  {
+                    id: "STRENGTH",
+                    nameAr: "التقوية والتحمل",
+                    nameEn: "Strength & Hypertrophy",
+                    count: clinical.phaseBreakdown.STRENGTH || 0,
+                    color: "border-blue-200 bg-blue-50/40 text-blue-700",
+                    badgeColor: "bg-blue-100 text-blue-800",
+                    desc: "بناء القوة القصوى والتحمل العضلي",
+                  },
+                  {
+                    id: "NEUROMUSCULAR",
+                    nameAr: "التوافق العصبي",
+                    nameEn: "Neuromuscular Control",
+                    count: clinical.phaseBreakdown.NEUROMUSCULAR || 0,
+                    color: "border-indigo-200 bg-indigo-50/40 text-indigo-700",
+                    badgeColor: "bg-indigo-100 text-indigo-800",
+                    desc: "تدريبات التوازن والثبات الحركي الديناميكي",
+                  },
+                  {
+                    id: "FUNCTIONAL",
+                    nameAr: "التدريب الوظيفي",
+                    nameEn: "Functional Training",
+                    count: clinical.phaseBreakdown.FUNCTIONAL || 0,
+                    color: "border-teal-200 bg-teal-50/40 text-teal-700",
+                    badgeColor: "bg-teal-100 text-teal-800",
+                    desc: "تمارين الرشاقة، القفز، وتغيير الاتجاه",
+                  },
+                  {
+                    id: "RETURN_TO_SPORT",
+                    nameAr: "العودة للملعب",
+                    nameEn: "Return to Sport (RTP)",
+                    count: clinical.phaseBreakdown.RETURN_TO_SPORT || 0,
+                    color: "border-emerald-200 bg-emerald-50/40 text-emerald-700",
+                    badgeColor: "bg-emerald-100 text-emerald-800",
+                    desc: "المشاركة الكاملة واجتياز اختبارات RTS",
+                  },
+                ].map((phase, idx) => (
+                  <div
+                    key={phase.id}
+                    className={cn(
+                      "p-4 rounded-xl border flex flex-col justify-between transition-all hover:shadow-sm",
+                      phase.color
+                    )}
+                  >
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-bold font-mono opacity-60">0{idx + 1}</span>
+                        <Badge className={cn("text-xs font-bold", phase.badgeColor)}>
+                          {phase.count} حالات
+                        </Badge>
+                      </div>
+                      <h4 className="font-extrabold text-sm text-slate-900">{phase.nameAr}</h4>
+                      <p className="text-[11px] font-mono opacity-70 mt-0.5">{phase.nameEn}</p>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-3 pt-2 border-t border-slate-200/60 leading-relaxed">
+                      {phase.desc}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Injury Distribution & Side Breakdown Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Column 1 & 2: Injury Breakdown */}
+            <Card className="lg:col-span-2 border border-slate-200 shadow-sm bg-white">
+              <CardHeader className="p-5 border-b border-slate-100 bg-slate-50/50">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Activity className="w-5 h-5 text-emerald-600" />
+                    <CardTitle className="text-base font-bold text-navy-950">
+                      توزيع الإصابات الرياضية في العيادة (Injury Breakdown)
+                    </CardTitle>
+                  </div>
+                  <span className="text-xs text-slate-400">
+                    {clinical.injuryBreakdown.length} أنواع إصابات مسجلة
+                  </span>
+                </div>
+              </CardHeader>
+              <CardContent className="p-5 space-y-4">
+                {clinical.injuryBreakdown.length === 0 ? (
+                  <div className="text-center py-10 text-slate-400 space-y-2">
+                    <FolderHeart className="w-10 h-10 mx-auto text-slate-300" />
+                    <p className="text-sm font-semibold text-slate-600">لا توجد حالات سريرية مسجلة بعد</p>
+                    <p className="text-xs text-slate-400">
+                      قم بإضافة حالة مريض جديدة للبدء في تتبع التوزيع الإحصائي للإصابات.
+                    </p>
+                    <div className="pt-2">
+                      <Link href="/add-case">
+                        <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2">
+                          <UserPlus className="w-4 h-4" />
+                          <span>إضافة حالة مريض جديدة</span>
+                        </Button>
+                      </Link>
+                    </div>
+                  </div>
+                ) : (
+                  clinical.injuryBreakdown.map((item) => (
+                    <div key={item.name} className="space-y-1.5">
+                      <div className="flex items-center justify-between text-xs font-semibold">
+                        <span className="text-slate-800 flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />
+                          {item.name}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-slate-500">{item.count} حالة</span>
+                          <span className="text-emerald-700 font-bold font-mono">({item.percentage}%)</span>
+                        </div>
+                      </div>
+                      <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
+                        <div
+                          className="bg-emerald-600 h-2.5 rounded-full transition-all duration-500"
+                          style={{ width: `${Math.max(item.percentage, 5)}%` }}
+                        />
+                      </div>
+                    </div>
+                  ))
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Column 3: Injured Side & Quick Actions */}
+            <div className="space-y-6">
+              {/* Injured Side Card */}
+              <Card className="border border-slate-200 shadow-sm bg-white">
+                <CardHeader className="p-5 border-b border-slate-100 bg-slate-50/50">
+                  <CardTitle className="text-base font-bold text-navy-950 flex items-center gap-2">
+                    <Shield className="w-4 h-4 text-emerald-600" />
+                    توزيع الطرف المصاب (Injured Side)
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="p-5 space-y-3">
+                  <div className="flex items-center justify-between p-3 rounded-lg bg-slate-50 border border-slate-100">
+                    <span className="text-xs font-bold text-slate-700">الجانب الأيمن (Right Side)</span>
+                    <Badge className="bg-emerald-100 text-emerald-800 border-none font-bold">
+                      {clinical.sideBreakdown.RIGHT} حالات
+                    </Badge>
+                  </div>
+                  <div className="flex items-center justify-between p-3 rounded-lg bg-slate-50 border border-slate-100">
+                    <span className="text-xs font-bold text-slate-700">الجانب الأيسر (Left Side)</span>
+                    <Badge className="bg-blue-100 text-blue-800 border-none font-bold">
+                      {clinical.sideBreakdown.LEFT} حالات
+                    </Badge>
+                  </div>
+                  <div className="flex items-center justify-between p-3 rounded-lg bg-slate-50 border border-slate-100">
+                    <span className="text-xs font-bold text-slate-700">كلا الجانبين (Bilateral)</span>
+                    <Badge className="bg-purple-100 text-purple-800 border-none font-bold">
+                      {clinical.sideBreakdown.BILATERAL} حالات
+                    </Badge>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Quick Actions */}
+              <Card className="border border-emerald-100 shadow-sm bg-gradient-to-br from-emerald-500/10 via-white to-slate-50">
+                <CardHeader className="p-5 pb-3">
+                  <CardTitle className="text-sm font-bold text-navy-950 flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-emerald-600" />
+                    إجراءات سريرية سريعة
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="p-5 pt-0 space-y-2">
+                  <Link href="/add-case" className="block">
+                    <Button className="w-full bg-emerald-600 hover:bg-emerald-700 text-white justify-between h-10 shadow-sm">
+                      <span className="flex items-center gap-2">
+                        <UserPlus className="w-4 h-4" />
+                        <span>إضافة حالة سريرية جديدة</span>
+                      </span>
+                      <ChevronLeft className="w-4 h-4" />
+                    </Button>
+                  </Link>
+
+                  <Link href="/cases" className="block">
+                    <Button variant="outline" className="w-full justify-between h-10 border-slate-300 hover:bg-slate-50 text-slate-800">
+                      <span className="flex items-center gap-2">
+                        <FolderHeart className="w-4 h-4 text-slate-600" />
+                        <span>استعراض ملفات الحالات</span>
+                      </span>
+                      <ChevronLeft className="w-4 h-4 text-slate-400" />
+                    </Button>
+                  </Link>
+
+                  <Link href="/exercises" className="block">
+                    <Button variant="outline" className="w-full justify-between h-10 border-slate-300 hover:bg-slate-50 text-slate-800">
+                      <span className="flex items-center gap-2">
+                        <Dumbbell className="w-4 h-4 text-slate-600" />
+                        <span>مكتبة التمارين المعتمدة</span>
+                      </span>
+                      <ChevronLeft className="w-4 h-4 text-slate-400" />
+                    </Button>
+                  </Link>
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-8">
 
       {/* 2. KPI Cards Row */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
@@ -1277,6 +1766,8 @@ function AnalyticsContent() {
           )}
         </CardContent>
       </Card>
+      </div>
+      )}
 
       {/* Footer Info & Last Update */}
       <div className="flex flex-col sm:flex-row items-center justify-between text-xs text-slate-400 border-t border-slate-200/60 pt-4 gap-2">

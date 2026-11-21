@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import prisma from "@/lib/db";
+import { recordHeartbeat } from "@/lib/analytics";
 
 export async function POST(request: NextRequest) {
   try {
@@ -7,37 +7,17 @@ export async function POST(request: NextRequest) {
     let { visitorId, sessionId, page } = body;
 
     if (!visitorId) {
-      visitorId = request.cookies.get("pm_vid")?.value;
+      visitorId = request.cookies.get("pm_vid")?.value || "anon-client";
     }
     if (!sessionId) {
-      sessionId = request.cookies.get("pm_sid")?.value;
+      sessionId = request.cookies.get("pm_sid")?.value || "sess-client";
     }
 
-    if (!visitorId || !page) {
-      // If still missing, provide fallback so heartbeat never crashes
-      visitorId = visitorId || "anon-client";
-      page = page || "/analytics";
-    }
-
-    await prisma.visitorHeartbeat.create({
-      data: {
-        visitorId,
-        sessionId: sessionId || null,
-        page,
-      },
-    });
-
-    // Update session last_active
-    if (sessionId) {
-      await prisma.visitorSession.updateMany({
-        where: { id: sessionId },
-        data: { lastActiveAt: new Date() },
-      });
-    }
+    await recordHeartbeat(visitorId, sessionId, page || "/");
 
     return NextResponse.json({ ok: true });
   } catch (error) {
-    console.error("Heartbeat error:", error);
-    return NextResponse.json({ error: "Failed" }, { status: 500 });
+    console.warn("Heartbeat error ignored:", error);
+    return NextResponse.json({ ok: true });
   }
 }
