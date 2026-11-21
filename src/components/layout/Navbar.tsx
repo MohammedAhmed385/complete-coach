@@ -132,8 +132,8 @@ export function Navbar() {
                     ) : (
                       <Eye className="w-3.5 h-3.5 text-teal-400" />
                     )}
-                    <span className="max-w-[120px] truncate">
-                      {isAdmin ? "كابتن يوسف (Admin)" : user.name || "عميل (عرض فقط)"}
+                    <span className="max-w-[140px] truncate">
+                      {isAdmin ? (user.name || "مدير النظام") : (user.name || "عميل (عرض فقط)")}
                     </span>
                   </div>
                   <button

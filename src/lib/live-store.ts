@@ -541,3 +541,83 @@ export async function updateLiveConsultationStatusAsync(
   }
   return memoryConsultations[index];
 }
+
+// ──────────────────────────────────────────────
+// CONTACT INQUIRIES & GMAIL NOTIFICATIONS
+// ──────────────────────────────────────────────
+
+export interface LiveInquiry {
+  id: string;
+  name: string;
+  phone: string;
+  email?: string | null;
+  service: string;
+  message: string;
+  createdAt: string;
+  status: "new" | "contacted" | "archived";
+}
+
+let memoryInquiries: LiveInquiry[] = [];
+let inquiriesLoadedFromFile = false;
+
+export function getLiveInquiries(): LiveInquiry[] {
+  if (!inquiriesLoadedFromFile) {
+    const raw = safeReadFile("inquiries.json");
+    if (raw) {
+      try {
+        memoryInquiries = JSON.parse(raw) as LiveInquiry[];
+      } catch {
+        // Fallback
+      }
+    }
+    inquiriesLoadedFromFile = true;
+  }
+  return [...memoryInquiries];
+}
+
+export async function getLiveInquiriesAsync(): Promise<LiveInquiry[]> {
+  try {
+    const kv = await getCloudflareKV();
+    if (kv) {
+      const data = await kv.get("inquiries", "json");
+      if (Array.isArray(data)) {
+        memoryInquiries = data as LiveInquiry[];
+        inquiriesLoadedFromFile = true;
+        return [...memoryInquiries];
+      }
+    }
+  } catch (err) {
+    console.warn("KV get inquiries skipped:", err);
+  }
+  return getLiveInquiries();
+}
+
+export async function saveLiveInquiryAsync(inq: Partial<LiveInquiry>): Promise<LiveInquiry> {
+  getLiveInquiries();
+  const id = inq.id || `inq-${Date.now()}`;
+  const complete: LiveInquiry = {
+    id,
+    name: inq.name || "زائر للموقع",
+    phone: inq.phone || "",
+    email: inq.email || null,
+    service: inq.service || "online_consultation",
+    message: inq.message || "",
+    createdAt: inq.createdAt || new Date().toISOString(),
+    status: inq.status || "new",
+  };
+
+  memoryInquiries.unshift(complete);
+  safeWriteFile("inquiries.json", JSON.stringify(memoryInquiries, null, 2));
+
+  try {
+    const kv = await getCloudflareKV();
+    if (kv) {
+      await kv.put("inquiries", JSON.stringify(memoryInquiries));
+    }
+  } catch (err) {
+    console.warn("KV put inquiries skipped:", err);
+  }
+
+  return complete;
+}
+

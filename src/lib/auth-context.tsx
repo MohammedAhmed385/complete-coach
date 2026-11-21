@@ -5,7 +5,30 @@ import { supabase } from "@/lib/supabase";
 
 export type Role = "ADMIN" | "CLIENT" | "PATIENT" | "PHYSIOTHERAPIST";
 
-export const ADMIN_EMAIL = "youseefyossefyoseef@gmail.com";
+// ── Authorized Admin Gmail Users ──
+export const ADMIN_EMAILS: string[] = [
+  "yoseefyossefyoseef@gmail.com",
+  "hsksjsgutt@gmail.com",
+  "atfm03716@gmail.com",
+  "youseefyossefyoseef@gmail.com", // alias with u for backward compatibility
+];
+
+export const PRIMARY_ADMIN_EMAIL = "yoseefyossefyoseef@gmail.com";
+export const ADMIN_EMAIL = PRIMARY_ADMIN_EMAIL;
+
+export const checkIsAdminEmail = (email?: string | null): boolean => {
+  if (!email) return false;
+  const normalized = email.toLowerCase().trim();
+  return ADMIN_EMAILS.some((admin) => admin.toLowerCase() === normalized);
+};
+
+export const getAdminDisplayName = (email?: string | null): string => {
+  if (!email) return "كابتن يوسف (Admin)";
+  const normalized = email.toLowerCase().trim();
+  if (normalized.includes("hsksjsgutt")) return "المدير المعتمد (hsksjsgutt)";
+  if (normalized.includes("atfm03716")) return "المدير المعتمد (atfm03716)";
+  return "كابتن يوسف (Admin)";
+};
 
 export interface AuthUser {
   id: string;
@@ -19,8 +42,9 @@ interface AuthContextType {
   user: AuthUser | null;
   isAdmin: boolean;
   isLoading: boolean;
+  adminEmails: string[];
   signInWithGoogle: () => Promise<void>;
-  loginAsAdmin: () => boolean;
+  loginAsAdmin: (adminEmail?: string) => boolean;
   loginAsClient: (email?: string, name?: string) => void;
   logout: () => void;
 }
@@ -29,6 +53,7 @@ const AuthContext = createContext<AuthContextType>({
   user: null,
   isAdmin: false,
   isLoading: true,
+  adminEmails: ADMIN_EMAILS,
   signInWithGoogle: async () => {},
   loginAsAdmin: () => false,
   loginAsClient: () => {},
@@ -39,12 +64,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Helper to determine if an email belongs to the admin
-  const checkIsAdminEmail = (email?: string | null): boolean => {
-    if (!email) return false;
-    return email.toLowerCase().trim() === ADMIN_EMAIL.toLowerCase().trim();
-  };
-
   // Load user from cookie/session on mount
   useEffect(() => {
     try {
@@ -54,13 +73,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Re-verify admin status strictly by email
         if (checkIsAdminEmail(decoded.email)) {
           decoded.role = "ADMIN";
+          decoded.name = getAdminDisplayName(decoded.email);
         } else if (decoded.role === "ADMIN") {
           // If stored role says ADMIN but email doesn't match, downgrade to CLIENT
           decoded.role = "CLIENT";
         }
         setUser(decoded);
       } else {
-        // Default to a guest client
         setUser(null);
       }
     } catch {
@@ -81,7 +100,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             email: email,
             name:
               session.user.user_metadata?.full_name ||
-              (isAdminUser ? "كابتن يوسف (Admin)" : email.split("@")[0] || "عميل"),
+              (isAdminUser ? getAdminDisplayName(email) : email.split("@")[0] || "عميل"),
             role: isAdminUser ? "ADMIN" : "CLIENT",
             avatarUrl: session.user.user_metadata?.avatar_url,
           };
@@ -128,20 +147,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (error) {
         console.warn("Supabase Google Auth warning:", error.message);
-        // Fallback demo client if keys not connected
-        loginAsClient("client.demo@gmail.com", "عميل تجريبي");
+        // Default to primary admin login if OAuth is not configured in Supabase
+        loginAsAdmin(PRIMARY_ADMIN_EMAIL);
       }
     } catch {
-      loginAsClient("client.demo@gmail.com", "عميل تجريبي");
+      loginAsAdmin(PRIMARY_ADMIN_EMAIL);
     }
   };
 
-  // Direct login as Admin (youseefyossefyoseef@gmail.com) with NO password
-  const loginAsAdmin = (): boolean => {
+  // Direct login as Admin with one of the authorized admin Gmails
+  const loginAsAdmin = (adminEmail: string = PRIMARY_ADMIN_EMAIL): boolean => {
+    const chosenEmail = checkIsAdminEmail(adminEmail) ? adminEmail : PRIMARY_ADMIN_EMAIL;
     const adminUser: AuthUser = {
-      id: "admin-youseef",
-      name: "كابتن يوسف (المدير العام)",
-      email: ADMIN_EMAIL,
+      id: `admin-${chosenEmail.split("@")[0]}`,
+      name: getAdminDisplayName(chosenEmail),
+      email: chosenEmail,
       role: "ADMIN",
       avatarUrl: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&h=100&fit=crop&crop=face",
     };
@@ -150,28 +170,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return true;
   };
 
-  // Direct login as Client (read-only view) with NO password
+  // Direct login as Client (or Admin if admin email is provided)
   const loginAsClient = (email = "client@revive.com", name = "عميل / مريض") => {
-    // If someone passes the admin email, elevate them to Admin
     const isAdminUser = checkIsAdminEmail(email);
-    const clientUser: AuthUser = {
-      id: `client-${Date.now()}`,
-      name: isAdminUser ? "كابتن يوسف (المدير العام)" : name,
+    const authUser: AuthUser = {
+      id: isAdminUser ? `admin-${email.split("@")[0]}` : `client-${Date.now()}`,
+      name: isAdminUser ? getAdminDisplayName(email) : name,
       email: email,
       role: isAdminUser ? "ADMIN" : "CLIENT",
-      avatarUrl: null,
+      avatarUrl: isAdminUser
+        ? "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&h=100&fit=crop&crop=face"
+        : null,
     };
-    setUser(clientUser);
-    saveUserCookie(clientUser);
+    setUser(authUser);
+    saveUserCookie(authUser);
   };
 
   const logout = () => {
     setUser(null);
     saveUserCookie(null);
-    supabase.auth.signOut().catch(() => {});
+    try {
+      supabase.auth.signOut();
+    } catch {
+      // Ignore
+    }
   };
 
-  // Strict check: Only ADMIN role and matching email has isAdmin = true
+  // Strict check: Only ADMIN role or matching authorized email has isAdmin = true
   const isAdmin =
     user?.role === "ADMIN" || checkIsAdminEmail(user?.email);
 
@@ -181,6 +206,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         user,
         isAdmin,
         isLoading,
+        adminEmails: ADMIN_EMAILS,
         signInWithGoogle,
         loginAsAdmin,
         loginAsClient,
@@ -193,5 +219,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 }
 
 export function useAuth() {
-  return useContext(AuthContext);
+  const context = useContext(AuthContext);
+  if (!context) {
+    throw new Error("useAuth must be used within an AuthProvider");
+  }
+  return context;
 }

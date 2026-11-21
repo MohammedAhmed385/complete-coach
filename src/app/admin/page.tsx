@@ -181,20 +181,27 @@ export default function AdminPage() {
             </p>
           </div>
 
-          <div className="pt-2 space-y-3">
-            <Button
-              onClick={() => {
-                loginAsAdmin();
-              }}
-              className="w-full h-12 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 font-black gap-2 text-sm shadow-md"
-            >
-              <ShieldCheck className="w-4 h-4" />
-              <span>دخول فوري كمدير النظام (Admin)</span>
-            </Button>
+          <div className="pt-2 space-y-2">
+            {[
+              { email: "yoseefyossefyoseef@gmail.com", label: "دخول كمدير: كابتن يوسف" },
+              { email: "hsksjsgutt@gmail.com", label: "دخول كمدير: hsksjsgutt" },
+              { email: "atfm03716@gmail.com", label: "دخول كمدير: atfm03716" },
+            ].map((adm) => (
+              <Button
+                key={adm.email}
+                onClick={() => {
+                  loginAsAdmin(adm.email);
+                }}
+                className="w-full h-11 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 font-black gap-2 text-xs shadow-md"
+              >
+                <ShieldCheck className="w-4 h-4" />
+                <span>{adm.label}</span>
+              </Button>
+            ))}
 
             <Link
               href="/"
-              className="block text-xs font-semibold text-slate-500 hover:text-slate-800 transition-colors"
+              className="block pt-2 text-xs font-semibold text-slate-500 hover:text-slate-800 transition-colors"
             >
               العودة للرئيسية (واجهة العميل)
             </Link>
@@ -430,6 +437,39 @@ export default function AdminPage() {
                         className="rounded-xl"
                       />
                     </div>
+                  </div>
+
+                  {/* Authorized Admin Gmail Connection Card */}
+                  <div className="p-5 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                        <span className="font-bold text-xs text-slate-900">
+                          حسابات Gmail المعتمدة لإدارة منصة Revive والتواصل:
+                        </span>
+                      </div>
+                      <Badge className="bg-emerald-600 text-white text-[10px]">
+                        3 حسابات معتمدة
+                      </Badge>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      {[
+                        { email: "yoseefyossefyoseef@gmail.com", title: "كابتن يوسف (المدير الأساسي)" },
+                        { email: "hsksjsgutt@gmail.com", title: "حساب إدارة معتمد 1" },
+                        { email: "atfm03716@gmail.com", title: "حساب إدارة معتمد 2" },
+                      ].map((adm) => (
+                        <div key={adm.email} className="p-3 bg-white rounded-xl border border-slate-200 text-xs space-y-1 shadow-sm">
+                          <span className="text-[11px] font-bold text-slate-800 block">{adm.title}</span>
+                          <span className="text-[11px] font-mono text-emerald-700 text-left dir-ltr block truncate">
+                            {adm.email}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="text-[11px] text-slate-500 leading-relaxed">
+                      💡 جميع الحسابات الثلاثة أعلاه تملك صلاحيات Super Admin الكاملة للدخول المباشر، وتصلها جميع إشعارات واستفسارات المرضى عبر Gmail.
+                    </p>
                   </div>
 
                   {/* Announcement Banner */}
