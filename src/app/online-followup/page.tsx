@@ -114,55 +114,7 @@ export interface OnlineHour {
   isOpen: boolean;
 }
 
-// ── Fallback Data (When DB is unseeded or offline) ──
-
-const FALLBACK_PATIENTS: PatientRecord[] = [
-  {
-    id: "pat-1",
-    name: "أحمد محمود المنصوري",
-    phone: "+201012345678",
-    email: "ahmed.mansouri@example.com",
-    injuryType: "إعادة بناء الرباط الصليبي — ACL Reconstruction",
-    injuredSide: "RIGHT",
-    rehabPrograms: [{ phase: "RESTORE_ROM", isActive: true }],
-  },
-  {
-    id: "pat-2",
-    name: "سارة عبد الرحمن فوزي",
-    phone: "+201123456789",
-    email: "sara.fawzy@example.com",
-    injuryType: "اعتلال وتر الرضفة — Patellar Tendinopathy",
-    injuredSide: "LEFT",
-    rehabPrograms: [{ phase: "STRENGTH", isActive: true }],
-  },
-  {
-    id: "pat-3",
-    name: "كريم يوسف النجار",
-    phone: "+201234567890",
-    email: "karim.naggar@example.com",
-    injuryType: "مرفق التنس — Tennis Elbow (Lateral Epicondylitis)",
-    injuredSide: "RIGHT",
-    rehabPrograms: [{ phase: "ACUTE", isActive: true }],
-  },
-  {
-    id: "pat-4",
-    name: "مروان خالد العوضي",
-    phone: "+201098765432",
-    email: "marwan.awadi@example.com",
-    injuryType: "التواء الكاحل الخارجي — Lateral Ankle Sprain Grade II",
-    injuredSide: "LEFT",
-    rehabPrograms: [{ phase: "FUNCTIONAL", isActive: true }],
-  },
-  {
-    id: "pat-5",
-    name: "نورا حازم الشريف",
-    phone: "+201187654321",
-    email: "noura.sherif@example.com",
-    injuryType: "متلازمة الألم الرضفي الفخذي — Patellofemoral Pain (PFPS)",
-    injuredSide: "BILATERAL",
-    rehabPrograms: [{ phase: "STRENGTH", isActive: true }],
-  },
-];
+// ── Real Clinic Schedule Initial Hours ──
 
 const INITIAL_HOURS: OnlineHour[] = [
   { id: "h-0", dayOfWeek: 0, dayNameAr: "الأحد", dayNameEn: "Sunday", startTime: "10:00", endTime: "18:00", isOpen: true },
@@ -251,19 +203,49 @@ function OnlineFollowUpContent() {
     try {
       setIsLoadingPatients(true);
       const res = await fetch("/api/cases");
+      let remoteCases: PatientRecord[] = [];
       if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
-          setPatients(data);
-        } else {
-          setPatients(FALLBACK_PATIENTS);
+        const data = await res.json().catch(() => []);
+        if (Array.isArray(data)) {
+          remoteCases = data;
+        }
+      }
+
+      // Merge with browser local store
+      let localCases: PatientRecord[] = [];
+      if (typeof window !== "undefined") {
+        try {
+          const raw = localStorage.getItem("revive_cases");
+          if (raw) localCases = JSON.parse(raw);
+        } catch {
+          // ignore
+        }
+      }
+
+      // Deduplicate by ID
+      const map = new Map<string, PatientRecord>();
+      for (const c of remoteCases) {
+        if (c.id) map.set(c.id, c);
+      }
+      for (const c of localCases) {
+        if (c.id && !map.has(c.id)) {
+          map.set(c.id, c);
+        }
+      }
+
+      setPatients(Array.from(map.values()));
+    } catch (err) {
+      console.warn("Could not fetch /api/cases, checking local cases:", err);
+      if (typeof window !== "undefined") {
+        try {
+          const raw = localStorage.getItem("revive_cases");
+          if (raw) setPatients(JSON.parse(raw));
+        } catch {
+          setPatients([]);
         }
       } else {
-        setPatients(FALLBACK_PATIENTS);
+        setPatients([]);
       }
-    } catch (err) {
-      console.warn("Could not fetch /api/cases, using fallback patients:", err);
-      setPatients(FALLBACK_PATIENTS);
     } finally {
       setIsLoadingPatients(false);
     }
@@ -273,14 +255,48 @@ function OnlineFollowUpContent() {
     try {
       setIsLoadingConsultations(true);
       const res = await fetch("/api/consultations");
+      let remoteConsults: Consultation[] = [];
       if (res.ok) {
-        const data = await res.json();
+        const data = await res.json().catch(() => []);
         if (Array.isArray(data)) {
-          setConsultations(data);
+          remoteConsults = data;
         }
       }
+
+      // Merge with local consultations
+      let localConsults: Consultation[] = [];
+      if (typeof window !== "undefined") {
+        try {
+          const raw = localStorage.getItem("revive_consultations");
+          if (raw) localConsults = JSON.parse(raw);
+        } catch {
+          // ignore
+        }
+      }
+
+      const map = new Map<string, Consultation>();
+      for (const c of remoteConsults) {
+        if (c.id) map.set(c.id, c);
+      }
+      for (const c of localConsults) {
+        if (c.id && !map.has(c.id)) {
+          map.set(c.id, c);
+        }
+      }
+
+      setConsultations(Array.from(map.values()));
     } catch (err) {
       console.error("Failed to fetch /api/consultations:", err);
+      if (typeof window !== "undefined") {
+        try {
+          const raw = localStorage.getItem("revive_consultations");
+          if (raw) setConsultations(JSON.parse(raw));
+        } catch {
+          setConsultations([]);
+        }
+      } else {
+        setConsultations([]);
+      }
     } finally {
       setIsLoadingConsultations(false);
     }
@@ -378,7 +394,17 @@ function OnlineFollowUpContent() {
       }
 
       const created = await res.json();
-      setConsultations((prev) => [created, ...prev]);
+      setConsultations((prev) => {
+        const nextList = [created, ...prev.filter((c) => c.id !== created.id)];
+        if (typeof window !== "undefined") {
+          try {
+            localStorage.setItem("revive_consultations", JSON.stringify(nextList));
+          } catch {
+            // ignore
+          }
+        }
+        return nextList;
+      });
 
       setFeedbackMessage({
         type: "success",
@@ -410,9 +436,17 @@ function OnlineFollowUpContent() {
       });
 
       if (res.ok) {
-        setConsultations((prev) =>
-          prev.map((c) => (c.id === id ? { ...c, status: newStatus } : c))
-        );
+        setConsultations((prev) => {
+          const nextList = prev.map((c) => (c.id === id ? { ...c, status: newStatus } : c));
+          if (typeof window !== "undefined") {
+            try {
+              localStorage.setItem("revive_consultations", JSON.stringify(nextList));
+            } catch {
+              // ignore
+            }
+          }
+          return nextList;
+        });
         setFeedbackMessage({
           type: "success",
           text:
@@ -683,19 +717,27 @@ function OnlineFollowUpContent() {
                       onValueChange={(val) => setSelectedPatientId(val)}
                     >
                       <SelectTrigger className="w-full h-11 text-start">
-                        <SelectValue placeholder="اختر مريضاً من ملفات العيادة /api/cases..." />
+                        <SelectValue placeholder="اختر مريضاً من ملفات العيادة..." />
                       </SelectTrigger>
                       <SelectContent>
-                        {patients.map((pat) => (
-                          <SelectItem key={pat.id} value={pat.id}>
-                            <div className="flex items-center justify-between gap-4 py-0.5">
-                              <span className="font-semibold text-slate-900">{pat.name}</span>
-                              <span className="text-xs text-slate-500">
-                                ({pat.injuryType})
-                              </span>
-                            </div>
+                        {patients.length === 0 ? (
+                          <SelectItem value="no-patient" disabled>
+                            <span className="text-slate-400 text-xs">
+                              لا توجد حالات مسجلة حالياً — قم بإضافة حالة أولاً من صفحة إضافة حالة
+                            </span>
                           </SelectItem>
-                        ))}
+                        ) : (
+                          patients.map((pat) => (
+                            <SelectItem key={pat.id} value={pat.id}>
+                              <div className="flex items-center justify-between gap-4 py-0.5">
+                                <span className="font-semibold text-slate-900">{pat.name}</span>
+                                <span className="text-xs text-slate-500">
+                                  ({pat.injuryType})
+                                </span>
+                              </div>
+                            </SelectItem>
+                          ))
+                        )}
                       </SelectContent>
                     </Select>
 

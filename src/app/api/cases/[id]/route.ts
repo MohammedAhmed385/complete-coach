@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma, { isDbConfigured } from "@/lib/db";
-import { getLiveCases, deleteLiveCase, updateLiveCase } from "@/lib/live-store";
+import { getLiveCasesAsync, deleteLiveCaseAsync, saveLiveCaseAsync } from "@/lib/live-store";
 
 export async function GET(
   request: NextRequest,
@@ -45,8 +45,8 @@ export async function GET(
     }
   }
 
-  // 2. Fallback to Live Store
-  const cases = getLiveCases();
+  // 2. Fallback to Live Store (KV + Memory)
+  const cases = await getLiveCasesAsync();
   const c = cases.find((item) => item.id === id);
   if (c) {
     return NextResponse.json(c);
@@ -69,8 +69,8 @@ export async function DELETE(
     }
   }
 
-  // Delete from Live Store
-  deleteLiveCase(id);
+  // Delete from Live Store with KV sync
+  await deleteLiveCaseAsync(id);
   return NextResponse.json({ deleted: true, success: true });
 }
 
@@ -79,7 +79,7 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const body = await request.json();
+  const body = await request.json().catch(() => ({}));
 
   if (isDbConfigured()) {
     try {
@@ -92,7 +92,7 @@ export async function PATCH(
     }
   }
 
-  // Update in Live Store
-  const updated = updateLiveCase(id, body);
+  // Update in Live Store with KV sync
+  const updated = await saveLiveCaseAsync({ id, ...body });
   return NextResponse.json(updated || { id, ...body });
 }

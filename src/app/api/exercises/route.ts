@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma, { isDbConfigured } from "@/lib/db";
-import { getLiveExercises, saveLiveExercise } from "@/lib/live-store";
+import { getLiveExercisesAsync, saveLiveExerciseAsync } from "@/lib/live-store";
 
 export async function GET(request: NextRequest) {
   const search = request.nextUrl.searchParams.get("search")?.toLowerCase().trim() || "";
@@ -38,8 +38,8 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // 2. Real Live Store
-  let exercises = getLiveExercises();
+  // 2. Real Live Store with KV multi-device support
+  let exercises = await getLiveExercisesAsync();
   if (search) {
     exercises = exercises.filter(
       (e) =>
@@ -66,10 +66,10 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
+    const body = await request.json().catch(() => ({}));
 
-    // Save in Live Store
-    const saved = saveLiveExercise({
+    // Save in Live Store with KV support
+    const saved = await saveLiveExerciseAsync({
       nameAr: body.nameAr,
       nameEn: body.nameEn,
       category: body.category || "General",

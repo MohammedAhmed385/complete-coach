@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma, { isDbConfigured } from "@/lib/db";
-import { getLiveCases, saveLiveCase } from "@/lib/live-store";
+import { getLiveCasesAsync, saveLiveCaseAsync } from "@/lib/live-store";
 
 // GET — list patients/cases
 export async function GET(request: NextRequest) {
@@ -37,8 +37,8 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // 2. Real Live Store
-  let liveCases = getLiveCases();
+  // 2. Real Live Store (KV + Memory)
+  let liveCases = await getLiveCasesAsync();
   if (search) {
     liveCases = liveCases.filter(
       (c) =>
@@ -55,10 +55,17 @@ export async function GET(request: NextRequest) {
 // POST — create patient/case
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
+    const body = await request.json().catch(() => ({}));
 
-    // Save in Live Store first for guaranteed persistence
-    const saved = saveLiveCase({
+    if (!body || !body.name || !body.injuryType) {
+      return NextResponse.json(
+        { error: "البيانات الأساسية للمريض مطلوبة (الاسم ونوع الإصابة)" },
+        { status: 400 }
+      );
+    }
+
+    // Save in Live Store with KV support first for guaranteed multi-device persistence
+    const saved = await saveLiveCaseAsync({
       id: body.id,
       name: body.name,
       phone: body.phone,
