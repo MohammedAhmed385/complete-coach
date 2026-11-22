@@ -25,6 +25,7 @@ import {
   AlertCircle,
   Sparkles,
   Info,
+  Trash2,
 } from "lucide-react";
 
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -169,6 +170,42 @@ function ExercisesContent() {
   const [isPrescribing, setIsPrescribing] = useState<boolean>(false);
   const [prescribeSuccessMessage, setPrescribeSuccessMessage] = useState<string | null>(null);
   const [prescribeError, setPrescribeError] = useState<string | null>(null);
+
+  // --- STATE: Delete Exercise ---
+  const [exerciseToDelete, setExerciseToDelete] = useState<Exercise | null>(null);
+  const [isDeletingExercise, setIsDeletingExercise] = useState<boolean>(false);
+  const [deleteSuccessMessage, setDeleteSuccessMessage] = useState<string | null>(null);
+
+  const handleDeleteExercise = async () => {
+    if (!exerciseToDelete) return;
+    setIsDeletingExercise(true);
+    try {
+      const res = await fetch(`/api/exercises?id=${exerciseToDelete.id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "فشل حذف التمرين");
+      }
+      setExercises((prev) => prev.filter((e) => e.id !== exerciseToDelete.id));
+      if (typeof window !== "undefined") {
+        try {
+          const localCustom = JSON.parse(localStorage.getItem("revive_custom_exercises") || "[]");
+          const updated = localCustom.filter((e: any) => e.id !== exerciseToDelete.id);
+          localStorage.setItem("revive_custom_exercises", JSON.stringify(updated));
+        } catch {
+          // ignore
+        }
+      }
+      setDeleteSuccessMessage(`تم حذف تمرين "${exerciseToDelete.nameAr}" بنجاح.`);
+      setExerciseToDelete(null);
+      setTimeout(() => setDeleteSuccessMessage(null), 4000);
+    } catch (err: any) {
+      alert(err.message || "حدث خطأ أثناء حذف التمرين");
+    } finally {
+      setIsDeletingExercise(false);
+    }
+  };
 
   // --- FETCH EXERCISES ---
   const fetchExercises = useCallback(async () => {
@@ -747,6 +784,14 @@ ${youtubeLink}
           3. EXERCISE GRID / SKELETONS / EMPTY STATE
       ───────────────────────────────────────────────────────────── */}
       <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-8">
+        {/* Delete Success Alert */}
+        {deleteSuccessMessage && (
+          <div className="mb-6 p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 flex items-center gap-3 font-semibold shadow-xs animate-in fade-in">
+            <Check className="w-5 h-5 text-emerald-600 shrink-0" />
+            <p className="text-sm">{deleteSuccessMessage}</p>
+          </div>
+        )}
+
         {/* Error message banner */}
         {error && (
           <div className="mb-6 p-4 rounded-xl bg-red-50 border border-red-200 text-red-700 flex items-center justify-between">
@@ -898,6 +943,18 @@ ${youtubeLink}
                         <h3 className="font-bold text-lg text-slate-900 group-hover:text-emerald-700 transition-colors leading-snug">
                           {exercise.nameAr}
                         </h3>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setExerciseToDelete(exercise);
+                          }}
+                          className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg shrink-0 transition-colors"
+                          title="حذف هذا التمرين نهائياً"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
                       </div>
                       <p className="text-xs font-semibold text-slate-400 font-mono tracking-tight" dir="ltr">
                         {exercise.nameEn}
@@ -989,6 +1046,17 @@ ${youtubeLink}
                     >
                       <Eye className="w-4 h-4 text-slate-500" />
                       <span>تفاصيل</span>
+                    </Button>
+
+                    {/* 5. Delete Exercise */}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setExerciseToDelete(exercise)}
+                      className="col-span-2 h-8 text-xs font-semibold text-red-600 hover:text-red-700 bg-red-50/50 hover:bg-red-100/70 border-red-200/80 gap-1.5 transition-colors shadow-2xs"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>حذف هذا التمرين (Delete)</span>
                     </Button>
                   </div>
                 </Card>
@@ -1779,6 +1847,72 @@ ${youtubeLink}
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* ─────────────────────────────────────────────────────────────
+          4. DELETE EXERCISE CONFIRMATION DIALOG
+      ───────────────────────────────────────────────────────────── */}
+      <Dialog open={Boolean(exerciseToDelete)} onOpenChange={(open) => !open && setExerciseToDelete(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <div className="flex items-center gap-2">
+              <div className="w-9 h-9 rounded-lg bg-red-100 text-red-600 flex items-center justify-center">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <DialogTitle className="text-lg font-bold text-slate-900">
+                  تأكيد حذف التمرين
+                </DialogTitle>
+                <DialogDescription className="text-xs text-slate-500 mt-0.5">
+                  حذف التمرين نهائياً من المكتبة وقواعد البيانات
+                </DialogDescription>
+              </div>
+            </div>
+          </DialogHeader>
+
+          <div className="py-3 space-y-2">
+            <p className="text-sm text-slate-700">
+              هل أنت متأكد من رغبتك في حذف تمرين{" "}
+              <span className="font-bold text-red-600">"{exerciseToDelete?.nameAr}"</span>؟
+            </p>
+            <p className="text-xs text-slate-500 bg-amber-50 border border-amber-200 p-2.5 rounded-lg leading-relaxed">
+              تنبيه: سيتم إزالة هذا التمرين نهائياً من قاعدة البيانات والسحابة، ولن يظهر بعد ذلك في مكتبة التمارين.
+            </p>
+          </div>
+
+          <DialogFooter className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setExerciseToDelete(null)}
+              disabled={isDeletingExercise}
+              className="text-xs font-semibold"
+            >
+              إلغاء
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              onClick={handleDeleteExercise}
+              disabled={isDeletingExercise}
+              className="text-xs font-bold gap-1.5 bg-red-600 hover:bg-red-700 text-white"
+            >
+              {isDeletingExercise ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>جاري الحذف...</span>
+                </>
+              ) : (
+                <>
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>تأكيد الحذف نهائياً</span>
+                </>
+              )}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

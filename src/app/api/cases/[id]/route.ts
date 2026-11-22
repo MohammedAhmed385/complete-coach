@@ -81,18 +81,87 @@ export async function PATCH(
   const { id } = await params;
   const body = await request.json().catch(() => ({}));
 
+  // Resolve Phase Transition
+  let updatedPrograms = body.rehabPrograms;
+  if (body.phase) {
+    const cases = await getLiveCasesAsync();
+    const existingCase = cases.find((c) => c.id === id);
+    const prevPrograms = existingCase?.rehabPrograms || [];
+    updatedPrograms = [
+      {
+        id: `prog-${Date.now()}`,
+        phase: body.phase,
+        notes: body.phaseNotes || body.rehabNotes || `انتقال إلى مرحلة: ${body.phase}`,
+        isActive: true,
+        startDate: new Date().toISOString(),
+      },
+      ...prevPrograms.map((p) => ({ ...p, isActive: false })),
+    ];
+  }
+
+  // Sync with DB if reachable
   if (isDbConfigured()) {
     try {
-      await prisma.patient.update({
-        where: { id },
-        data: body,
-      });
-    } catch {
-      // Ignore
+      const allowedKeys = [
+        "name",
+        "phone",
+        "email",
+        "dateOfBirth",
+        "gender",
+        "injuryType",
+        "injuredSide",
+        "injuryDate",
+        "surgeryDate",
+        "rehabStartDate",
+        "mechanismOfInjury",
+        "notes",
+        "status",
+      ];
+      const dbData: Record<string, any> = {};
+      for (const k of allowedKeys) {
+        if (body[k] !== undefined) {
+          if ((k === "injuryDate" || k === "rehabStartDate") && body[k]) {
+            dbData[k] = new Date(body[k]);
+          } else if (k === "surgeryDate") {
+            dbData[k] = body[k] ? new Date(body[k]) : null;
+          } else {
+            dbData[k] = body[k];
+          }
+        }
+      }
+
+      if (Object.keys(dbData).length > 0) {
+        await prisma.patient.update({
+          where: { id },
+          data: dbData,
+        });
+      }
+
+      if (body.phase) {
+        await prisma.rehabProgram.updateMany({
+          where: { patientId: id, isActive: true },
+          data: { isActive: false, endDate: new Date() },
+        });
+        await prisma.rehabProgram.create({
+          data: {
+            patientId: id,
+            phase: body.phase,
+            isActive: true,
+            startDate: new Date(),
+            notes: body.phaseNotes || "انتقال المرحلة",
+          },
+        });
+      }
+    } catch (dbErr) {
+      console.warn("DB update skipped:", dbErr);
     }
   }
 
   // Update in Live Store with KV sync
-  const updated = await saveLiveCaseAsync({ id, ...body });
+  const caseUpdatePayload: Record<string, any> = { id, ...body };
+  if (updatedPrograms) {
+    caseUpdatePayload.rehabPrograms = updatedPrograms;
+  }
+  const updated = await saveLiveCaseAsync(caseUpdatePayload);
   return NextResponse.json(updated || { id, ...body });
 }

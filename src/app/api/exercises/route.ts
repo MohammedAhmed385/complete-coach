@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma, { isDbConfigured } from "@/lib/db";
-import { getLiveExercisesAsync, saveLiveExerciseAsync } from "@/lib/live-store";
+import { getLiveExercisesAsync, saveLiveExerciseAsync, deleteLiveExerciseAsync } from "@/lib/live-store";
 
 export async function GET(request: NextRequest) {
   const search = request.nextUrl.searchParams.get("search")?.toLowerCase().trim() || "";
@@ -108,5 +108,31 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error("Exercise POST error:", error);
     return NextResponse.json({ error: "Failed to create exercise" }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  try {
+    const id = request.nextUrl.searchParams.get("id");
+    if (!id) {
+      return NextResponse.json(
+        { error: "معرف التمرين مطلوب لحذف التمرين (Exercise ID required)" },
+        { status: 400 }
+      );
+    }
+
+    if (isDbConfigured()) {
+      try {
+        await prisma.exercise.delete({ where: { id } });
+      } catch (dbErr) {
+        console.warn("DB delete exercise skipped:", dbErr);
+      }
+    }
+
+    const deleted = await deleteLiveExerciseAsync(id);
+    return NextResponse.json({ success: true, deleted, id });
+  } catch (error) {
+    console.error("Exercise DELETE error:", error);
+    return NextResponse.json({ error: "Failed to delete exercise" }, { status: 500 });
   }
 }

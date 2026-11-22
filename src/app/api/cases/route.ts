@@ -119,8 +119,11 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json(saved, { status: 201 });
-  } catch (error) {
+  } catch (error: any) {
     console.error("Patient POST error:", error);
-    return NextResponse.json({ error: "Failed to create patient" }, { status: 500 });
+    return NextResponse.json(
+      { error: error?.message || "فشل حفظ بيانات المريض في الخادم" },
+      { status: 500 }
+    );
   }
 }

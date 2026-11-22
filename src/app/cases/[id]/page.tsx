@@ -31,6 +31,8 @@ import {
   TrendingUp,
   CheckSquare,
   Share2,
+  Pencil,
+  Target,
 } from "lucide-react";
 import {
   Card,
@@ -226,10 +228,12 @@ interface PatientDetail {
   updatedAt: string;
   romMeasurements: ROMMeasurementItem[];
   girthMeasurements: GirthEvaluationItem[];
+  girthEvaluations?: GirthEvaluationItem[];
   rehabPrograms: RehabProgramItem[];
   appointments: AppointmentDetailItem[];
   rtpEvaluations: RTPEvaluationItem[];
   exerciseSchedules: ExerciseScheduleItem[];
+  videoAnalyses?: any[];
 }
 
 // Phase Transition Criteria Interface
@@ -349,6 +353,50 @@ function PatientDetailPageContent() {
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  // Full Rehab Phase Selection Modal State
+  const [isPhaseModalOpen, setIsPhaseModalOpen] = useState(false);
+  const [selectedNewPhase, setSelectedNewPhase] = useState<string>("ACUTE");
+  const [phaseTransitionNotes, setPhaseTransitionNotes] = useState<string>("");
+  const [isUpdatingPhase, setIsUpdatingPhase] = useState(false);
+
+  // Full Patient Profile Edit Modal State
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [editFormData, setEditFormData] = useState({
+    name: "",
+    phone: "",
+    email: "",
+    gender: "male",
+    injuryType: "",
+    injuredSide: "RIGHT",
+    injuryDate: "",
+    surgeryDate: "",
+    rehabStartDate: "",
+    mechanismOfInjury: "",
+    notes: "",
+  });
+
+  // Sync edit form data when patient loads
+  useEffect(() => {
+    if (patient) {
+      setEditFormData({
+        name: patient.name || "",
+        phone: patient.phone || "",
+        email: patient.email || "",
+        gender: patient.gender || "male",
+        injuryType: patient.injuryType || "",
+        injuredSide: patient.injuredSide || "RIGHT",
+        injuryDate: patient.injuryDate ? patient.injuryDate.split("T")[0] : "",
+        surgeryDate: patient.surgeryDate ? patient.surgeryDate.split("T")[0] : "",
+        rehabStartDate: patient.rehabStartDate ? patient.rehabStartDate.split("T")[0] : "",
+        mechanismOfInjury: patient.mechanismOfInjury || "",
+        notes: patient.notes || "",
+      });
+      const activePhaseKey = patient.rehabPrograms?.[0]?.phase || "ACUTE";
+      setSelectedNewPhase(activePhaseKey);
+    }
+  }, [patient]);
+
   // Fetch Patient Details
   const fetchPatientDetails = async () => {
     if (!id) return;
@@ -376,7 +424,34 @@ function PatientDetailPageContent() {
         throw new Error("حدث خطأ أثناء تحميل بيانات المريض");
       }
       const data: PatientDetail = await res.json();
-      setPatient(data);
+
+      // Ensure RTP and Video Analysis records are loaded
+      let rtpList = data.rtpEvaluations || [];
+      let videoList = data.videoAnalyses || [];
+      try {
+        const [rtpRes, vaRes] = await Promise.all([
+          fetch(`/api/rtp?patientId=${id}`).catch(() => null),
+          fetch(`/api/video-analysis?patientId=${id}`).catch(() => null),
+        ]);
+        if (rtpRes && rtpRes.ok) {
+          const rtpArr = await rtpRes.json().catch(() => []);
+          if (Array.isArray(rtpArr) && rtpArr.length > 0) rtpList = rtpArr;
+        }
+        if (vaRes && vaRes.ok) {
+          const vaArr = await vaRes.json().catch(() => []);
+          if (Array.isArray(vaArr) && vaArr.length > 0) videoList = vaArr;
+        }
+      } catch (subErr) {
+        console.warn("Sub-records fetch skipped:", subErr);
+      }
+
+      const mergedPatient: PatientDetail = {
+        ...data,
+        rtpEvaluations: rtpList,
+        videoAnalyses: videoList,
+      };
+
+      setPatient(mergedPatient);
 
       // Initialize daily exercises
       if (data.exerciseSchedules?.length > 0) {
@@ -622,44 +697,97 @@ function PatientDetailPageContent() {
     );
   };
 
-  // Advance Phase Action
-  const handleAdvancePhase = async () => {
+  // Phase Transition via Selector Action
+  const handleConfirmPhaseTransition = async () => {
     if (!patient) return;
-    setIsAdvancingPhase(true);
+    setIsUpdatingPhase(true);
     try {
-      const phasesOrder = [
-        "ACUTE",
-        "RESTORE_ROM",
-        "STRENGTH",
-        "NEUROMUSCULAR",
-        "FUNCTIONAL",
-        "RETURN_TO_SPORT",
-      ];
-      const currentPhase = patient.rehabPrograms?.[0]?.phase || "ACUTE";
-      const currentIndex = phasesOrder.indexOf(currentPhase);
-      const nextPhase =
-        currentIndex >= 0 && currentIndex < phasesOrder.length - 1
-          ? phasesOrder[currentIndex + 1]
-          : currentPhase;
-
       const res = await fetch(`/api/cases/${patient.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          notes: `${patient.notes || ""}\n[${new Date().toLocaleDateString("ar-EG")}] تم استيفاء شروط الترقية للمرحلة (${nextPhase})`,
+          phase: selectedNewPhase,
+          phaseNotes:
+            phaseTransitionNotes.trim() ||
+            `انتقال سريري معتمد إلى مرحلة: ${getPhaseLabel(selectedNewPhase).ar} (${getPhaseLabel(selectedNewPhase).en})`,
         }),
       });
 
       if (!res.ok) throw new Error("فشل تحديث مرحلة المريض");
 
+      if (typeof window !== "undefined") {
+        try {
+          const raw = localStorage.getItem("revive_cases");
+          if (raw) {
+            const list = JSON.parse(raw);
+            const nextList = list.map((item: any) =>
+              item.id === patient.id
+                ? {
+                    ...item,
+                    rehabPrograms: [
+                      {
+                        phase: selectedNewPhase,
+                        isActive: true,
+                        notes: phaseTransitionNotes || "انتقال المرحلة",
+                      },
+                      ...(item.rehabPrograms || []).map((p: any) => ({ ...p, isActive: false })),
+                    ],
+                  }
+                : item
+            );
+            localStorage.setItem("revive_cases", JSON.stringify(nextList));
+          }
+        } catch {}
+      }
+
       setAdvanceSuccess(true);
       setTimeout(() => setAdvanceSuccess(false), 3000);
-      fetchPatientDetails();
+      setIsPhaseModalOpen(false);
+      setPhaseTransitionNotes("");
+      await fetchPatientDetails();
     } catch (err: any) {
-      console.error("Advance phase error:", err);
+      console.error("Phase transition error:", err);
       alert(err.message || "حدث خطأ أثناء ترقية المرحلة");
     } finally {
-      setIsAdvancingPhase(false);
+      setIsUpdatingPhase(false);
+    }
+  };
+
+  // Edit Patient Profile Action
+  const handleSaveEditProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!patient) return;
+    setIsSavingEdit(true);
+    try {
+      const res = await fetch(`/api/cases/${patient.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(editFormData),
+      });
+
+      if (!res.ok) throw new Error("فشل حفظ تعديلات ملف المريض");
+
+      if (typeof window !== "undefined") {
+        try {
+          const raw = localStorage.getItem("revive_cases");
+          if (raw) {
+            const list = JSON.parse(raw);
+            const nextList = list.map((item: any) =>
+              item.id === patient.id ? { ...item, ...editFormData } : item
+            );
+            localStorage.setItem("revive_cases", JSON.stringify(nextList));
+          }
+        } catch {}
+      }
+
+      await fetchPatientDetails();
+      setIsEditModalOpen(false);
+      alert("تم حفظ تعديلات ملف المريض بنجاح!");
+    } catch (err: any) {
+      console.error("Save edit profile error:", err);
+      alert(err.message || "حدث خطأ أثناء حفظ التعديلات");
+    } finally {
+      setIsSavingEdit(false);
     }
   };
 
@@ -681,9 +809,10 @@ function PatientDetailPageContent() {
     });
   }, [patient?.romMeasurements, romSearch, romJointFilter]);
 
-  // Flattened Girth Measurements for Multi-Date Comparison
+  // Flattened Girth Measurements for Multi-Date Comparison (Harmonizes both formats)
   const flattenedGirthRows = useMemo(() => {
-    if (!patient?.girthMeasurements) return [];
+    const list = patient?.girthEvaluations || patient?.girthMeasurements;
+    if (!list || !Array.isArray(list)) return [];
     const rows: {
       evaluationId: string;
       date: string;
@@ -695,22 +824,30 @@ function PatientDetailPageContent() {
       lsi: number | null;
     }[] = [];
 
-    patient.girthMeasurements.forEach((evaluation) => {
-      evaluation.measurements?.forEach((m) => {
-        const diff =
-          m.healthyCm != null ? Number((m.healthyCm - m.injuredCm).toFixed(1)) : null;
-        const lsi =
-          m.healthyCm && m.healthyCm > 0
-            ? Math.round((m.injuredCm / m.healthyCm) * 100)
+    list.forEach((evaluation: any, eIdx: number) => {
+      const evalDate = evaluation.date || evaluation.createdAt || patient?.createdAt || new Date().toISOString();
+      const evalId = evaluation.id || `eval-${eIdx}`;
+      evaluation.measurements?.forEach((m: any) => {
+        const injured = typeof m.injuredCm === "string" ? parseFloat(m.injuredCm) : Number(m.injuredCm);
+        const healthy =
+          m.healthyCm !== null && m.healthyCm !== undefined && m.healthyCm !== ""
+            ? typeof m.healthyCm === "string"
+              ? parseFloat(m.healthyCm)
+              : Number(m.healthyCm)
             : null;
 
+        if (isNaN(injured)) return;
+
+        const diff = healthy !== null && !isNaN(healthy) ? Number((healthy - injured).toFixed(1)) : null;
+        const lsi = healthy !== null && !isNaN(healthy) && healthy > 0 ? Math.round((injured / healthy) * 100) : null;
+
         rows.push({
-          evaluationId: evaluation.id,
-          date: evaluation.date,
-          landmark: evaluation.landmark,
-          distanceCm: m.distanceCm,
-          injuredCm: m.injuredCm,
-          healthyCm: m.healthyCm || null,
+          evaluationId: evalId,
+          date: evalDate,
+          landmark: evaluation.landmark || "محيط العضلات",
+          distanceCm: Number(m.distanceCm) || 0,
+          injuredCm: injured,
+          healthyCm: healthy,
           deficitCm: diff,
           lsi,
         });
@@ -718,7 +855,7 @@ function PatientDetailPageContent() {
     });
 
     return rows;
-  }, [patient?.girthMeasurements]);
+  }, [patient?.girthMeasurements, (patient as any)?.girthEvaluations, patient?.createdAt]);
 
   // Loading State
   if (isLoading) {
@@ -942,7 +1079,23 @@ function PatientDetailPageContent() {
               className="gap-2 py-2.5 px-4 text-xs sm:text-sm font-semibold rounded-lg data-[state=active]:bg-white data-[state=active]:text-emerald-800 data-[state=active]:shadow-sm"
             >
               <Ruler className="w-4 h-4" />
-              <span>محيط العضلات (Girth)</span>
+              <span>محيط العضلات ({flattenedGirthRows.length})</span>
+            </TabsTrigger>
+
+            <TabsTrigger
+              value="rtp"
+              className="gap-2 py-2.5 px-4 text-xs sm:text-sm font-semibold rounded-lg data-[state=active]:bg-white data-[state=active]:text-emerald-800 data-[state=active]:shadow-sm"
+            >
+              <CheckSquare className="w-4 h-4 text-emerald-600" />
+              <span>شروط النزول للملعب ({patient.rtpEvaluations?.length || 0})</span>
+            </TabsTrigger>
+
+            <TabsTrigger
+              value="video-analysis"
+              className="gap-2 py-2.5 px-4 text-xs sm:text-sm font-semibold rounded-lg data-[state=active]:bg-white data-[state=active]:text-emerald-800 data-[state=active]:shadow-sm"
+            >
+              <Video className="w-4 h-4 text-blue-600" />
+              <span>تحليل الذكاء الاصطناعي ({patient.videoAnalyses?.length || 0})</span>
             </TabsTrigger>
 
             <TabsTrigger
@@ -1088,12 +1241,11 @@ function PatientDetailPageContent() {
                 </span>
 
                 <Button
-                  onClick={handleAdvancePhase}
-                  disabled={isAdvancingPhase || criteriaProgressPct < 80}
-                  className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white gap-2 font-semibold"
+                  onClick={() => setIsPhaseModalOpen(true)}
+                  className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white gap-2 font-semibold shadow-xs"
                 >
                   <Sparkles className="w-4 h-4" />
-                  <span>{isAdvancingPhase ? "جارٍ التحديث..." : "ترقية الحالة للمرحلة التالية"}</span>
+                  <span>ترقية أو اختيار المرحلة التأهيلية (Select Phase)</span>
                 </Button>
               </CardFooter>
             </Card>
@@ -1314,6 +1466,243 @@ function PatientDetailPageContent() {
                       ))}
                     </TableBody>
                   </Table>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* ═══════════════════════════════════════════ */}
+          {/* TAB: RETURN TO PLAY (RTP) EVALUATIONS */}
+          {/* ═══════════════════════════════════════════ */}
+          <TabsContent value="rtp" className="space-y-6">
+            <Card className="border-slate-200/90 shadow-sm">
+              <CardHeader className="pb-4 border-b border-slate-100 bg-slate-50/50">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <CardTitle className="text-base sm:text-lg font-bold text-navy-950 flex items-center gap-2">
+                      <CheckSquare className="w-5 h-5 text-emerald-600" />
+                      <span>تقييمات معايير النزول للملعب والجاهزية الرياضية (RTP)</span>
+                    </CardTitle>
+                    <CardDescription className="text-xs text-slate-500">
+                      سجل الفحوصات الوظيفية واختبارات القفز والألم الخاصة بقرار العودة للمنافسة بأمان
+                    </CardDescription>
+                  </div>
+                  <Button asChild size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold gap-1.5 self-start sm:self-auto">
+                    <Link href="/return-to-play">
+                      <Plus className="w-4 h-4" />
+                      <span>إجراء فحص جاهزية جديد</span>
+                    </Link>
+                  </Button>
+                </div>
+              </CardHeader>
+
+              <CardContent className="p-6">
+                {(!patient.rtpEvaluations || patient.rtpEvaluations.length === 0) ? (
+                  <div className="p-12 text-center space-y-3">
+                    <CheckSquare className="w-10 h-10 text-slate-300 mx-auto" />
+                    <p className="text-sm text-slate-500 font-medium">
+                      لم يتم تسجيل أي فحص معايير عودة للملعب لهذا المريض حتى الآن.
+                    </p>
+                    <Button asChild variant="outline" size="sm" className="mt-2 text-xs border-emerald-300 text-emerald-700">
+                      <Link href="/return-to-play">
+                        الانتقال إلى صفحة شروط النزول للملعب
+                      </Link>
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="space-y-6">
+                    {patient.rtpEvaluations.map((evalItem, idx) => {
+                      const totalCrit = evalItem.criteria?.length || 0;
+                      const passedCrit = evalItem.criteria?.filter((c) => c.passed).length || 0;
+                      const score = evalItem.readinessScore ?? (totalCrit > 0 ? Math.round((passedCrit / totalCrit) * 100) : 0);
+                      const isReady = score >= 90;
+
+                      return (
+                        <div key={evalItem.id || idx} className="rounded-xl border border-slate-200 overflow-hidden bg-white shadow-xs">
+                          <div className="p-4 bg-slate-50/80 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
+                            <div className="flex items-center gap-3">
+                              <div className={cn(
+                                "w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm shadow-xs",
+                                isReady ? "bg-emerald-600 text-white" : "bg-amber-500 text-white"
+                              )}>
+                                {score}%
+                              </div>
+                              <div>
+                                <h4 className="font-bold text-sm text-slate-900">
+                                  {evalItem.protocolName || "تقييم العودة للملعب"}
+                                </h4>
+                                <span className="text-xs text-slate-500">
+                                  تاريخ التقييم: {formatDate(evalItem.evaluatedAt || (evalItem as any).createdAt || new Date().toISOString())} • المرحلة: {getPhaseLabel(evalItem.phase || "RETURN_TO_SPORT").ar}
+                                </span>
+                              </div>
+                            </div>
+
+                            <Badge className={cn(
+                              "text-xs px-3 py-1 font-bold",
+                              isReady ? "bg-emerald-100 text-emerald-800 border-emerald-300" : "bg-amber-100 text-amber-800 border-amber-300"
+                            )}>
+                              {isReady ? "جاهز للنزول للملعب (Cleared)" : `غير مكتمل (${passedCrit} من ${totalCrit} معيار)`}
+                            </Badge>
+                          </div>
+
+                          <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+                            {evalItem.criteria?.map((c, cIdx) => (
+                              <div key={c.id || cIdx} className={cn(
+                                "p-2.5 rounded-lg border flex items-start gap-2",
+                                c.passed ? "bg-emerald-50/40 border-emerald-200 text-emerald-950" : "bg-slate-50 border-slate-200 text-slate-600"
+                              )}>
+                                <span className={cn(
+                                  "w-5 h-5 rounded-full flex items-center justify-center shrink-0 mt-0.5 text-[11px] font-bold",
+                                  c.passed ? "bg-emerald-600 text-white" : "bg-slate-300 text-slate-700"
+                                )}>
+                                  {c.passed ? "✓" : "✗"}
+                                </span>
+                                <div>
+                                  <span className="font-semibold block">{c.criterionText}</span>
+                                  {c.notes && <span className="text-[11px] text-slate-500 mt-0.5 block">{c.notes}</span>}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* ═══════════════════════════════════════════ */}
+          {/* TAB: AI MOTION & VIDEO ANALYSES */}
+          {/* ═══════════════════════════════════════════ */}
+          <TabsContent value="video-analysis" className="space-y-6">
+            <Card className="border-slate-200/90 shadow-sm">
+              <CardHeader className="pb-4 border-b border-slate-100 bg-slate-50/50">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <CardTitle className="text-base sm:text-lg font-bold text-navy-950 flex items-center gap-2">
+                      <Video className="w-5 h-5 text-blue-600" />
+                      <span>سجل تحليلات الذكاء الاصطناعي والزوايا الحركية (AI Motion Analysis)</span>
+                    </CardTitle>
+                    <CardDescription className="text-xs text-slate-500">
+                      قياسات الزوايا المفصلية (الكتف، الكوع، الرسغ، العمود الفقري، الركبة، الكاحل) وتفعيل العضلات المسجلة بالفيديو
+                    </CardDescription>
+                  </div>
+                  <Button asChild size="sm" className="bg-blue-600 hover:bg-blue-700 text-white font-bold gap-1.5 self-start sm:self-auto">
+                    <Link href="/ai-analysis">
+                      <Video className="w-4 h-4" />
+                      <span>بدء تحليل فيديو جديد</span>
+                    </Link>
+                  </Button>
+                </div>
+              </CardHeader>
+
+              <CardContent className="p-6">
+                {(!patient.videoAnalyses || patient.videoAnalyses.length === 0) ? (
+                  <div className="p-12 text-center space-y-3">
+                    <Video className="w-10 h-10 text-slate-300 mx-auto" />
+                    <p className="text-sm text-slate-500 font-medium">
+                      لا توجد جلسات تحليل حركي بالذكاء الاصطناعي مسجلة لهذا المريض حتى الآن.
+                    </p>
+                    <Button asChild variant="outline" size="sm" className="mt-2 text-xs border-blue-300 text-blue-700">
+                      <Link href="/ai-analysis">
+                        الانتقال إلى صفحة تحليل الذكاء الاصطناعي (AI Analysis)
+                      </Link>
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="space-y-6">
+                    {patient.videoAnalyses.map((vaItem: any, idx: number) => (
+                      <div key={vaItem.id || idx} className="rounded-xl border border-slate-200 overflow-hidden bg-white shadow-xs">
+                        <div className="p-4 bg-slate-50/80 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-xl bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-sm">
+                              AI
+                            </div>
+                            <div>
+                              <h4 className="font-bold text-sm text-slate-900">
+                                {vaItem.exerciseName || "تحليل حركي مفصل"}
+                              </h4>
+                              <span className="text-xs text-slate-500">
+                                التاريخ: {formatDate(vaItem.evaluatedAt || vaItem.createdAt || new Date().toISOString())} • زاوية التصوير: {vaItem.cameraPlane === "frontal" ? "مستوى أمامي (Frontal)" : "مستوى جانبي (Sagittal)"}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Joint Angles Grid */}
+                        <div className="p-4 border-b border-slate-100">
+                          <span className="text-xs font-bold text-slate-700 block mb-2">الزوايا المفصلية المسجلة:</span>
+                          <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-2 text-center text-xs">
+                            {vaItem.jointAngles?.shoulder && (
+                              <div className="p-2 rounded-lg bg-slate-50 border border-slate-100">
+                                <span className="text-[11px] text-slate-400 block">الكتف (Shoulder)</span>
+                                <span className="font-bold text-slate-800 mt-1 block">
+                                  {vaItem.jointAngles.shoulder.right || vaItem.jointAngles.shoulder.left || 0}°
+                                </span>
+                              </div>
+                            )}
+                            {vaItem.jointAngles?.elbow && (
+                              <div className="p-2 rounded-lg bg-slate-50 border border-slate-100">
+                                <span className="text-[11px] text-slate-400 block">الكوع (Elbow)</span>
+                                <span className="font-bold text-slate-800 mt-1 block">
+                                  {vaItem.jointAngles.elbow.right || vaItem.jointAngles.elbow.left || 0}°
+                                </span>
+                              </div>
+                            )}
+                            {vaItem.jointAngles?.wrist && (
+                              <div className="p-2 rounded-lg bg-slate-50 border border-slate-100">
+                                <span className="text-[11px] text-slate-400 block">الرسغ (Wrist)</span>
+                                <span className="font-bold text-slate-800 mt-1 block">
+                                  {vaItem.jointAngles.wrist.right || vaItem.jointAngles.wrist.left || 0}°
+                                </span>
+                              </div>
+                            )}
+                            {vaItem.jointAngles?.spine && (
+                              <div className="p-2 rounded-lg bg-slate-50 border border-slate-100">
+                                <span className="text-[11px] text-slate-400 block">الجذع (Spine)</span>
+                                <span className="font-bold text-slate-800 mt-1 block">
+                                  {vaItem.jointAngles.spine.flexion || 0}°
+                                </span>
+                              </div>
+                            )}
+                            {vaItem.jointAngles?.knee && (
+                              <div className="p-2 rounded-lg bg-slate-50 border border-slate-100">
+                                <span className="text-[11px] text-slate-400 block">الركبة (Knee)</span>
+                                <span className="font-bold text-slate-800 mt-1 block">
+                                  {vaItem.jointAngles.knee.right || vaItem.jointAngles.knee.left || 0}°
+                                </span>
+                              </div>
+                            )}
+                            {vaItem.jointAngles?.ankle && (
+                              <div className="p-2 rounded-lg bg-slate-50 border border-slate-100">
+                                <span className="text-[11px] text-slate-400 block">الكاحل (Ankle)</span>
+                                <span className="font-bold text-slate-800 mt-1 block">
+                                  {vaItem.jointAngles.ankle.right || vaItem.jointAngles.ankle.left || 0}°
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Active Muscles Engagement */}
+                        {vaItem.activeMuscles && vaItem.activeMuscles.length > 0 && (
+                          <div className="p-4 bg-slate-50/50">
+                            <span className="text-xs font-bold text-slate-700 block mb-2">العضلات المستهدفة ونسبة التفعيل:</span>
+                            <div className="flex flex-wrap gap-2">
+                              {vaItem.activeMuscles.map((m: any, mIdx: number) => (
+                                <Badge key={mIdx} variant="secondary" className="text-xs py-1 px-2.5 bg-white border-slate-200">
+                                  <span className="font-bold text-emerald-800">{m.nameAr}</span>
+                                  <span className="text-slate-400 ms-1">({m.percentage}%)</span>
+                                </Badge>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 )}
               </CardContent>
             </Card>
@@ -1857,6 +2246,263 @@ function PatientDetailPageContent() {
               {isDeleting ? "جارٍ الحذف..." : "تأكيد الحذف"}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ═══════════════════════════════════════════ */}
+      {/* FULL REHAB PHASE SELECTION MODAL */}
+      {/* ═══════════════════════════════════════════ */}
+      <Dialog open={isPhaseModalOpen} onOpenChange={setIsPhaseModalOpen}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <div className="flex items-center gap-2">
+              <div className="w-9 h-9 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center">
+                <Sparkles className="w-5 h-5" />
+              </div>
+              <div>
+                <DialogTitle className="text-xl font-bold text-slate-900">
+                  تحديد أو تغيير المرحلة التأهيلية
+                </DialogTitle>
+                <DialogDescription className="text-xs text-slate-500 mt-0.5">
+                  اختر المرحلة التأهيلية المناسبة لحالة المريض السريرية واكتب أسباب الترقية أو الانتقال
+                </DialogDescription>
+              </div>
+            </div>
+          </DialogHeader>
+
+          <div className="py-4 space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {[
+                { key: "ACUTE", ar: "المرحلة الحادة والتحكم بالألم", en: "Acute / Protection", desc: "السيطرة على التورم والألم وحماية الأنسجة الملتهبة" },
+                { key: "RESTORE_ROM", ar: "استعادة المدى الحركي الكامل", en: "Restore ROM & Mobility", desc: "استعادة المدى الحركي الكامل النشط والسلبي" },
+                { key: "STRENGTH", ar: "التقوية العضلية والتحمل", en: "Strength & Hypertrophy", desc: "بناء القوة القصوى والتحمل العضلي حول المفصل" },
+                { key: "NEUROMUSCULAR", ar: "التحكم العصبي العضلي والتوازن", en: "Neuromuscular Control", desc: "تحسين التوافق العضلي العصبي وثبات الجذع والتوازن" },
+                { key: "FUNCTIONAL", ar: "التأهيل الوظيفي والمحاكاة", en: "Functional & Agility", desc: "تمارين الرشاقة وتغيير الاتجاه والمحاكاة الحركية" },
+                { key: "RETURN_TO_SPORT", ar: "الجاهزية التامة والنزول للملعب", en: "Return to Sport", desc: "استيفاء 100% من معايير الاختبارات والمشاركة بالمباريات" },
+              ].map((phaseItem) => {
+                const isSelected = selectedNewPhase === phaseItem.key;
+                return (
+                  <div
+                    key={phaseItem.key}
+                    onClick={() => setSelectedNewPhase(phaseItem.key)}
+                    className={cn(
+                      "p-3.5 rounded-xl border cursor-pointer transition-all flex flex-col justify-between",
+                      isSelected
+                        ? "border-emerald-600 bg-emerald-50/70 shadow-sm ring-2 ring-emerald-500/20"
+                        : "border-slate-200 hover:border-emerald-200 hover:bg-slate-50"
+                    )}
+                  >
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-bold text-xs text-slate-900">{phaseItem.ar}</span>
+                        {isSelected && <Check className="w-4 h-4 text-emerald-600 shrink-0" />}
+                      </div>
+                      <span className="text-[11px] text-slate-400 block font-mono" dir="ltr">{phaseItem.en}</span>
+                      <p className="text-[11px] text-slate-600 mt-1 leading-snug">{phaseItem.desc}</p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="space-y-1.5 pt-2 border-t border-slate-100">
+              <label className="text-xs font-semibold text-slate-700">ملاحظات الانتقال السريرية (Transition Notes):</label>
+              <Textarea
+                value={phaseTransitionNotes}
+                onChange={(e) => setPhaseTransitionNotes(e.target.value)}
+                placeholder="اكتب أسباب الترقية وملاحظات استجابة المريض للعلاج..."
+                rows={3}
+                className="text-xs"
+              />
+            </div>
+          </div>
+
+          <DialogFooter className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setIsPhaseModalOpen(false)}
+              disabled={isUpdatingPhase}
+              className="text-xs"
+            >
+              إلغاء
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              onClick={handleConfirmPhaseTransition}
+              disabled={isUpdatingPhase}
+              className="text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5"
+            >
+              {isUpdatingPhase ? "جاري التحديث..." : "تأكيد واعتماد المرحلة"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ═══════════════════════════════════════════ */}
+      {/* EDIT PATIENT PROFILE MODAL */}
+      {/* ═══════════════════════════════════════════ */}
+      <Dialog open={isEditModalOpen} onOpenChange={setIsEditModalOpen}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <form onSubmit={handleSaveEditProfile}>
+            <DialogHeader>
+              <div className="flex items-center gap-2">
+                <div className="w-9 h-9 rounded-lg bg-slate-100 text-slate-700 flex items-center justify-center">
+                  <Pencil className="w-5 h-5 text-slate-700" />
+                </div>
+                <div>
+                  <DialogTitle className="text-xl font-bold text-slate-900">
+                    تعديل بيانات ملف المريض
+                  </DialogTitle>
+                  <DialogDescription className="text-xs text-slate-500 mt-0.5">
+                    تعديل البيانات الأساسية، التواريخ، والتشخيص الإكلينيكي في أي وقت
+                  </DialogDescription>
+                </div>
+              </div>
+            </DialogHeader>
+
+            <div className="py-4 space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">اسم المريض *</label>
+                  <Input
+                    required
+                    value={editFormData.name}
+                    onChange={(e) => setEditFormData({ ...editFormData, name: e.target.value })}
+                    className="h-9 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">رقم الهاتف</label>
+                  <Input
+                    value={editFormData.phone}
+                    onChange={(e) => setEditFormData({ ...editFormData, phone: e.target.value })}
+                    className="h-9 text-xs"
+                    dir="ltr"
+                  />
+                </div>
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">البريد الإلكتروني</label>
+                  <Input
+                    type="email"
+                    value={editFormData.email}
+                    onChange={(e) => setEditFormData({ ...editFormData, email: e.target.value })}
+                    className="h-9 text-xs"
+                    dir="ltr"
+                  />
+                </div>
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">الجنس</label>
+                  <Select
+                    value={editFormData.gender}
+                    onValueChange={(val) => setEditFormData({ ...editFormData, gender: val })}
+                  >
+                    <SelectTrigger className="h-9 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="male">ذكر (Male)</SelectItem>
+                      <SelectItem value="female">أنثى (Female)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">نوع الإصابة / التشخيص *</label>
+                  <Input
+                    required
+                    value={editFormData.injuryType}
+                    onChange={(e) => setEditFormData({ ...editFormData, injuryType: e.target.value })}
+                    className="h-9 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">الطرف المصاب</label>
+                  <Select
+                    value={editFormData.injuredSide}
+                    onValueChange={(val: any) => setEditFormData({ ...editFormData, injuredSide: val })}
+                  >
+                    <SelectTrigger className="h-9 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="RIGHT">الطرف الأيمن (Right)</SelectItem>
+                      <SelectItem value="LEFT">الطرف الأيسر (Left)</SelectItem>
+                      <SelectItem value="BILATERAL">الطرفان معاً (Bilateral)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">تاريخ حدوث الإصابة</label>
+                  <Input
+                    type="date"
+                    value={editFormData.injuryDate}
+                    onChange={(e) => setEditFormData({ ...editFormData, injuryDate: e.target.value })}
+                    className="h-9 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">تاريخ الجراحة (إن وجدت)</label>
+                  <Input
+                    type="date"
+                    value={editFormData.surgeryDate}
+                    onChange={(e) => setEditFormData({ ...editFormData, surgeryDate: e.target.value })}
+                    className="h-9 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">تاريخ بدء التأهيل</label>
+                  <Input
+                    type="date"
+                    value={editFormData.rehabStartDate}
+                    onChange={(e) => setEditFormData({ ...editFormData, rehabStartDate: e.target.value })}
+                    className="h-9 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">آلية الإصابة (Mechanism)</label>
+                  <Input
+                    value={editFormData.mechanismOfInjury}
+                    onChange={(e) => setEditFormData({ ...editFormData, mechanismOfInjury: e.target.value })}
+                    placeholder="التواء، سقوط، تصادم..."
+                    className="h-9 text-xs"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="font-semibold text-xs text-slate-700 block mb-1">الملاحظات السريرية والتوصيات</label>
+                <Textarea
+                  value={editFormData.notes}
+                  onChange={(e) => setEditFormData({ ...editFormData, notes: e.target.value })}
+                  rows={3}
+                  className="text-xs"
+                />
+              </div>
+            </div>
+
+            <DialogFooter className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setIsEditModalOpen(false)}
+                disabled={isSavingEdit}
+                className="text-xs"
+              >
+                إلغاء
+              </Button>
+              <Button
+                type="submit"
+                size="sm"
+                disabled={isSavingEdit}
+                className="text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white"
+              >
+                {isSavingEdit ? "جاري الحفظ..." : "حفظ التعديلات"}
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
     </div>

@@ -1,5 +1,5 @@
-import fs from "fs";
-import path from "path";
+import * as fs from "fs";
+import * as path from "path";
 
 // ──────────────────────────────────────────────
 // FILE SYSTEM HELPERS (FAIL-SAFE FOR SERVERLESS)
@@ -83,6 +83,9 @@ export interface LiveCase {
   id: string;
   name: string;
   phone?: string | null;
+  email?: string | null;
+  dateOfBirth?: string | null;
+  gender?: string | null;
   injuryType: string;
   injuredSide: "RIGHT" | "LEFT" | "BILATERAL";
   injuryDate: string;
@@ -92,28 +95,80 @@ export interface LiveCase {
   notes?: string | null;
   status: "active" | "completed" | "paused";
   createdAt: string;
+  updatedAt?: string;
   rehabPrograms?: Array<{
     id?: string;
     phase: string;
     notes?: string | null;
     isActive: boolean;
+    startDate?: string;
   }>;
   romMeasurements?: Array<{
     id?: string;
+    patientId?: string;
     joint: string;
     movement: string;
     injuredAngle: number;
     healthyAngle?: number | null;
     notes?: string | null;
+    date?: string;
   }>;
   girthEvaluations?: Array<{
     id?: string;
+    patientId?: string;
     landmark: string;
+    date?: string;
     measurements?: Array<{
       distanceCm: number;
       injuredCm: number;
       healthyCm?: number | null;
     }>;
+  }>;
+  girthMeasurements?: Array<{
+    id?: string;
+    patientId?: string;
+    landmark: string;
+    date?: string;
+    measurements?: Array<{
+      distanceCm: number;
+      injuredCm: number;
+      healthyCm?: number | null;
+    }>;
+  }>;
+  rtpEvaluations?: Array<{
+    id: string;
+    patientId: string;
+    phase: string;
+    protocolName?: string | null;
+    readinessScore: number;
+    evaluatedAt: string;
+    createdAt?: string;
+    criteria: Array<{
+      id?: string;
+      criterionText: string;
+      passed: boolean;
+      notes?: string | null;
+    }>;
+  }>;
+  videoAnalyses?: Array<{
+    id: string;
+    patientId?: string | null;
+    userId?: string | null;
+    exerciseName?: string | null;
+    cameraPlane: string;
+    evaluatedAt: string;
+    createdAt?: string;
+    jointAngles?: Record<string, any>;
+    activeMuscles?: Array<{
+      nameAr: string;
+      nameEn: string;
+      percentage: number;
+      role: "primary" | "secondary";
+    }>;
+    summaryNotes?: string | null;
+    poseResults?: any;
+    kneeValgus?: any;
+    thumbnailUrl?: string | null;
   }>;
 }
 
@@ -155,29 +210,50 @@ export async function getLiveCasesAsync(): Promise<LiveCase[]> {
 export function saveLiveCase(newCase: Partial<LiveCase>): LiveCase {
   getLiveCases();
   const caseId = newCase.id || `case-${Date.now()}`;
+  const existingIndex = memoryCases.findIndex((c) => c.id === caseId);
+  const existingCase = existingIndex >= 0 ? memoryCases[existingIndex] : null;
+
+  // Harmonize girthEvaluations and girthMeasurements
+  const resolvedGirth =
+    newCase.girthEvaluations ||
+    newCase.girthMeasurements ||
+    existingCase?.girthEvaluations ||
+    existingCase?.girthMeasurements ||
+    [];
+
+  // Merge rehab programs properly
+  let resolvedRehabPrograms = newCase.rehabPrograms || existingCase?.rehabPrograms;
+  if (!resolvedRehabPrograms || resolvedRehabPrograms.length === 0) {
+    resolvedRehabPrograms = [{ phase: "ACUTE", isActive: true, notes: "المرحلة الأولية" }];
+  }
+
   const completeCase: LiveCase = {
     id: caseId,
-    name: newCase.name || "مريض جديد",
-    phone: newCase.phone || null,
-    injuryType: newCase.injuryType || "إصابة رياضية",
-    injuredSide: (newCase.injuredSide as any) || "RIGHT",
-    injuryDate: newCase.injuryDate || new Date().toISOString(),
-    surgeryDate: newCase.surgeryDate || null,
-    rehabStartDate: newCase.rehabStartDate || new Date().toISOString(),
-    mechanismOfInjury: newCase.mechanismOfInjury || null,
-    notes: newCase.notes || null,
-    status: (newCase.status as any) || "active",
-    createdAt: newCase.createdAt || new Date().toISOString(),
-    rehabPrograms: newCase.rehabPrograms || [
-      { phase: "ACUTE", isActive: true, notes: "المرحلة الأولية" },
-    ],
-    romMeasurements: newCase.romMeasurements || [],
-    girthEvaluations: newCase.girthEvaluations || [],
+    name: newCase.name ?? existingCase?.name ?? "مريض جديد",
+    phone: newCase.phone !== undefined ? newCase.phone : (existingCase?.phone ?? null),
+    email: newCase.email !== undefined ? newCase.email : (existingCase?.email ?? null),
+    dateOfBirth: newCase.dateOfBirth !== undefined ? newCase.dateOfBirth : (existingCase?.dateOfBirth ?? null),
+    gender: newCase.gender !== undefined ? newCase.gender : (existingCase?.gender ?? null),
+    injuryType: newCase.injuryType ?? existingCase?.injuryType ?? "إصابة رياضية",
+    injuredSide: (newCase.injuredSide as any) ?? existingCase?.injuredSide ?? "RIGHT",
+    injuryDate: newCase.injuryDate ?? existingCase?.injuryDate ?? new Date().toISOString(),
+    surgeryDate: newCase.surgeryDate !== undefined ? newCase.surgeryDate : (existingCase?.surgeryDate ?? null),
+    rehabStartDate: newCase.rehabStartDate ?? existingCase?.rehabStartDate ?? new Date().toISOString(),
+    mechanismOfInjury: newCase.mechanismOfInjury !== undefined ? newCase.mechanismOfInjury : (existingCase?.mechanismOfInjury ?? null),
+    notes: newCase.notes !== undefined ? newCase.notes : (existingCase?.notes ?? null),
+    status: (newCase.status as any) ?? existingCase?.status ?? "active",
+    createdAt: existingCase?.createdAt ?? newCase.createdAt ?? new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    rehabPrograms: resolvedRehabPrograms,
+    romMeasurements: newCase.romMeasurements ?? existingCase?.romMeasurements ?? [],
+    girthEvaluations: resolvedGirth,
+    girthMeasurements: resolvedGirth,
+    rtpEvaluations: newCase.rtpEvaluations ?? existingCase?.rtpEvaluations ?? [],
+    videoAnalyses: newCase.videoAnalyses ?? existingCase?.videoAnalyses ?? [],
   };
 
-  const existingIndex = memoryCases.findIndex((c) => c.id === caseId);
   if (existingIndex >= 0) {
-    memoryCases[existingIndex] = { ...memoryCases[existingIndex], ...completeCase };
+    memoryCases[existingIndex] = completeCase;
   } else {
     memoryCases.unshift(completeCase);
   }
@@ -620,4 +696,245 @@ export async function saveLiveInquiryAsync(inq: Partial<LiveInquiry>): Promise<L
 
   return complete;
 }
+
+// ──────────────────────────────────────────────
+// RETURN TO PLAY (RTP) EVALUATIONS STORAGE
+// ──────────────────────────────────────────────
+
+export interface LiveRTPEvaluation {
+  id: string;
+  patientId: string;
+  phase: string;
+  protocolName?: string | null;
+  readinessScore: number;
+  evaluatedAt: string;
+  createdAt: string;
+  criteria: Array<{
+    id?: string;
+    criterionText: string;
+    passed: boolean;
+    notes?: string | null;
+  }>;
+}
+
+let memoryRTPEvaluations: LiveRTPEvaluation[] = [];
+let rtpLoadedFromFile = false;
+
+export function getLiveRTPEvaluations(patientId?: string): LiveRTPEvaluation[] {
+  if (!rtpLoadedFromFile) {
+    const raw = safeReadFile("rtp.json");
+    if (raw) {
+      try {
+        memoryRTPEvaluations = JSON.parse(raw) as LiveRTPEvaluation[];
+      } catch {
+        // Fallback
+      }
+    }
+    rtpLoadedFromFile = true;
+  }
+  if (patientId) {
+    return memoryRTPEvaluations.filter((r) => r.patientId === patientId);
+  }
+  return [...memoryRTPEvaluations];
+}
+
+export async function getLiveRTPEvaluationsAsync(patientId?: string): Promise<LiveRTPEvaluation[]> {
+  try {
+    const kv = await getCloudflareKV();
+    if (kv) {
+      const data = await kv.get("rtp_evaluations", "json");
+      if (Array.isArray(data)) {
+        memoryRTPEvaluations = data as LiveRTPEvaluation[];
+        rtpLoadedFromFile = true;
+        if (patientId) {
+          return memoryRTPEvaluations.filter((r) => r.patientId === patientId);
+        }
+        return [...memoryRTPEvaluations];
+      }
+    }
+  } catch (err) {
+    console.warn("KV get RTP skipped:", err);
+  }
+  return getLiveRTPEvaluations(patientId);
+}
+
+export async function saveLiveRTPEvaluationAsync(evaluation: Partial<LiveRTPEvaluation>): Promise<LiveRTPEvaluation> {
+  getLiveRTPEvaluations();
+  const id = evaluation.id || `rtp-${Date.now()}`;
+  const complete: LiveRTPEvaluation = {
+    id,
+    patientId: evaluation.patientId || "",
+    phase: evaluation.phase || "RETURN_TO_SPORT",
+    protocolName: evaluation.protocolName || "معايير العودة للملعب",
+    readinessScore: evaluation.readinessScore ?? 0,
+    evaluatedAt: evaluation.evaluatedAt || new Date().toISOString(),
+    createdAt: evaluation.createdAt || new Date().toISOString(),
+    criteria: evaluation.criteria || [],
+  };
+
+  const existingIdx = memoryRTPEvaluations.findIndex((r) => r.id === id);
+  if (existingIdx >= 0) {
+    memoryRTPEvaluations[existingIdx] = complete;
+  } else {
+    memoryRTPEvaluations.unshift(complete);
+  }
+
+  safeWriteFile("rtp.json", JSON.stringify(memoryRTPEvaluations, null, 2));
+
+  // Sync with matching patient's file in LiveCases
+  if (complete.patientId) {
+    getLiveCases();
+    const caseIndex = memoryCases.findIndex((c) => c.id === complete.patientId);
+    if (caseIndex >= 0) {
+      const targetCase = memoryCases[caseIndex];
+      const existingRtpList = targetCase.rtpEvaluations || [];
+      const updatedRtpList = [complete, ...existingRtpList.filter((item) => item.id !== complete.id)];
+      memoryCases[caseIndex] = {
+        ...targetCase,
+        rtpEvaluations: updatedRtpList,
+        updatedAt: new Date().toISOString(),
+      };
+      safeWriteFile("cases.json", JSON.stringify(memoryCases, null, 2));
+    }
+  }
+
+  try {
+    const kv = await getCloudflareKV();
+    if (kv) {
+      await kv.put("rtp_evaluations", JSON.stringify(memoryRTPEvaluations));
+      await kv.put("cases", JSON.stringify(memoryCases));
+    }
+  } catch (err) {
+    console.warn("KV put RTP skipped:", err);
+  }
+
+  return complete;
+}
+
+// ──────────────────────────────────────────────
+// AI VIDEO & MOTION ANALYSES STORAGE
+// ──────────────────────────────────────────────
+
+export interface LiveVideoAnalysis {
+  id: string;
+  patientId?: string | null;
+  userId?: string | null;
+  exerciseName?: string | null;
+  cameraPlane: string;
+  evaluatedAt: string;
+  createdAt: string;
+  jointAngles?: Record<string, any>;
+  activeMuscles?: Array<{
+    nameAr: string;
+    nameEn: string;
+    percentage: number;
+    role: "primary" | "secondary";
+  }>;
+  summaryNotes?: string | null;
+  poseResults?: any;
+  kneeValgus?: any;
+  thumbnailUrl?: string | null;
+  videoUrl?: string | null;
+}
+
+let memoryVideoAnalyses: LiveVideoAnalysis[] = [];
+let videoAnalysesLoadedFromFile = false;
+
+export function getLiveVideoAnalyses(patientId?: string): LiveVideoAnalysis[] {
+  if (!videoAnalysesLoadedFromFile) {
+    const raw = safeReadFile("video_analyses.json");
+    if (raw) {
+      try {
+        memoryVideoAnalyses = JSON.parse(raw) as LiveVideoAnalysis[];
+      } catch {
+        // Fallback
+      }
+    }
+    videoAnalysesLoadedFromFile = true;
+  }
+  if (patientId) {
+    return memoryVideoAnalyses.filter((v) => v.patientId === patientId);
+  }
+  return [...memoryVideoAnalyses];
+}
+
+export async function getLiveVideoAnalysesAsync(patientId?: string): Promise<LiveVideoAnalysis[]> {
+  try {
+    const kv = await getCloudflareKV();
+    if (kv) {
+      const data = await kv.get("video_analyses", "json");
+      if (Array.isArray(data)) {
+        memoryVideoAnalyses = data as LiveVideoAnalysis[];
+        videoAnalysesLoadedFromFile = true;
+        if (patientId) {
+          return memoryVideoAnalyses.filter((v) => v.patientId === patientId);
+        }
+        return [...memoryVideoAnalyses];
+      }
+    }
+  } catch (err) {
+    console.warn("KV get video analyses skipped:", err);
+  }
+  return getLiveVideoAnalyses(patientId);
+}
+
+export async function saveLiveVideoAnalysisAsync(analysis: Partial<LiveVideoAnalysis>): Promise<LiveVideoAnalysis> {
+  getLiveVideoAnalyses();
+  const id = analysis.id || `va-${Date.now()}`;
+  const complete: LiveVideoAnalysis = {
+    id,
+    patientId: analysis.patientId || null,
+    userId: analysis.userId || null,
+    exerciseName: analysis.exerciseName || "تحليل حركي بالذكاء الاصطناعي",
+    cameraPlane: analysis.cameraPlane || "sagittal",
+    evaluatedAt: analysis.evaluatedAt || new Date().toISOString(),
+    createdAt: analysis.createdAt || new Date().toISOString(),
+    jointAngles: analysis.jointAngles || {},
+    activeMuscles: analysis.activeMuscles || [],
+    summaryNotes: analysis.summaryNotes || null,
+    poseResults: analysis.poseResults || null,
+    kneeValgus: analysis.kneeValgus || null,
+    thumbnailUrl: analysis.thumbnailUrl || null,
+    videoUrl: analysis.videoUrl || null,
+  };
+
+  const existingIdx = memoryVideoAnalyses.findIndex((v) => v.id === id);
+  if (existingIdx >= 0) {
+    memoryVideoAnalyses[existingIdx] = complete;
+  } else {
+    memoryVideoAnalyses.unshift(complete);
+  }
+
+  safeWriteFile("video_analyses.json", JSON.stringify(memoryVideoAnalyses, null, 2));
+
+  // Sync to Patient file if linked
+  if (complete.patientId) {
+    getLiveCases();
+    const caseIndex = memoryCases.findIndex((c) => c.id === complete.patientId);
+    if (caseIndex >= 0) {
+      const targetCase = memoryCases[caseIndex];
+      const existingList = targetCase.videoAnalyses || [];
+      const updatedList = [complete, ...existingList.filter((item) => item.id !== complete.id)];
+      memoryCases[caseIndex] = {
+        ...targetCase,
+        videoAnalyses: updatedList,
+        updatedAt: new Date().toISOString(),
+      };
+      safeWriteFile("cases.json", JSON.stringify(memoryCases, null, 2));
+    }
+  }
+
+  try {
+    const kv = await getCloudflareKV();
+    if (kv) {
+      await kv.put("video_analyses", JSON.stringify(memoryVideoAnalyses));
+      await kv.put("cases", JSON.stringify(memoryCases));
+    }
+  } catch (err) {
+    console.warn("KV put video analysis skipped:", err);
+  }
+
+  return complete;
+}
+
 

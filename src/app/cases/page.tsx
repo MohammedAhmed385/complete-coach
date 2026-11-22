@@ -632,6 +632,23 @@ function CasesContent() {
                   const currentProgram = patient.rehabPrograms?.[0];
                   const phaseObj = currentProgram ? getPhaseLabel(currentProgram.phase) : null;
 
+                  // Calculate Latest Girth Status
+                  const girthList = (patient as any).girthEvaluations || (patient as any).girthMeasurements || [];
+                  let latestGirthDeficit: number | null = null;
+                  let latestLsi: number | null = null;
+                  if (Array.isArray(girthList) && girthList.length > 0) {
+                    const firstEval = girthList[0];
+                    if (firstEval?.measurements?.length > 0) {
+                      const m = firstEval.measurements[0];
+                      const injured = typeof m.injuredCm === "string" ? parseFloat(m.injuredCm) : Number(m.injuredCm);
+                      const healthy = m.healthyCm ? (typeof m.healthyCm === "string" ? parseFloat(m.healthyCm) : Number(m.healthyCm)) : null;
+                      if (!isNaN(injured) && healthy && !isNaN(healthy)) {
+                        latestGirthDeficit = Number((healthy - injured).toFixed(1));
+                        latestLsi = Math.round((injured / healthy) * 100);
+                      }
+                    }
+                  }
+
                   return (
                     <Card
                       key={patient.id}
@@ -718,6 +735,27 @@ function CasesContent() {
                             ) : (
                               <Badge variant="secondary" className="text-xs text-slate-500">
                                 مرحلة غير محددة
+                              </Badge>
+                            )}
+
+                            {/* Muscle Girth Deficit Badge */}
+                            {latestGirthDeficit !== null ? (
+                              <Badge
+                                variant="outline"
+                                className={cn(
+                                  "text-xs font-semibold py-0.5",
+                                  latestGirthDeficit > 0
+                                    ? "bg-amber-50 text-amber-800 border-amber-200"
+                                    : "bg-emerald-50 text-emerald-800 border-emerald-200"
+                                )}
+                              >
+                                <span>📐 محيط: </span>
+                                <span>{latestGirthDeficit > 0 ? `-${latestGirthDeficit} سم` : "متماثل"}</span>
+                                {latestLsi && <span className="ms-1 font-mono text-[11px]">({latestLsi}%)</span>}
+                              </Badge>
+                            ) : (
+                              <Badge variant="outline" className="text-[11px] text-slate-400 border-slate-200 py-0.5">
+                                محيط: غير مسجل
                               </Badge>
                             )}
                           </div>
