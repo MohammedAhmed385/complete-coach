@@ -29,8 +29,6 @@ export interface SignUpParams {
   email: string;
   password: string;
   confirmPassword: string;
-  accountType: "USER" | "ADMIN";
-  adminCode?: string;
 }
 
 export interface AuthActionResult {
@@ -245,7 +243,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const isAdmin = user?.role === "ADMIN";
+  const isAdmin = Boolean(
+    user && checkIsAdminEmail(user.email) && user.role === "ADMIN"
+  );
 
   return (
     <AuthContext.Provider

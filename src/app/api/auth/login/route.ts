@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   AuthUser,
+  Role,
   SESSION_COOKIE_NAME,
   checkIsAdminEmail,
 } from "@/lib/auth-config";
@@ -47,9 +48,7 @@ export async function POST(request: NextRequest) {
           id: verifiedBackup.id,
           name: verifiedBackup.name,
           email: normalizedEmail,
-          role: checkIsAdminEmail(normalizedEmail)
-            ? "ADMIN"
-            : verifiedBackup.role,
+          role: checkIsAdminEmail(normalizedEmail) ? "ADMIN" : "CLIENT",
           passwordHash: verifiedBackup.passwordHash,
           salt: verifiedBackup.salt,
           avatarUrl: verifiedBackup.avatarUrl || null,
@@ -88,9 +87,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const finalRole = checkIsAdminEmail(account.email)
+    const finalRole: Role = checkIsAdminEmail(account.email)
       ? "ADMIN"
-      : account.role;
+      : "CLIENT";
 
     const authUser: AuthUser = {
       id: account.id,

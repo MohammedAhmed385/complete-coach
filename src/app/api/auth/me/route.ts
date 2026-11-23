@@ -11,9 +11,9 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ authenticated: false, user: null });
     }
 
-    if (checkIsAdminEmail(verifiedUser.email)) {
-      verifiedUser.role = "ADMIN";
-    }
+    verifiedUser.role = checkIsAdminEmail(verifiedUser.email)
+      ? "ADMIN"
+      : "CLIENT";
 
     return NextResponse.json({
       authenticated: true,

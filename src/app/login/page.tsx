@@ -4,7 +4,6 @@ import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
-  ShieldCheck,
   User,
   UserPlus,
   ArrowRight,
@@ -15,14 +14,13 @@ import {
   AlertCircle,
   Eye,
   EyeOff,
-  KeyRound,
 } from "lucide-react";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { useAuth, checkIsAdminEmail } from "@/lib/auth-context";
+import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/utils";
 
 type AuthMode = "signin" | "signup";
@@ -39,12 +37,10 @@ export default function LoginPage() {
   const [showSignInPassword, setShowSignInPassword] = useState(false);
 
   // Sign Up state
-  const [accountType, setAccountType] = useState<"USER" | "ADMIN">("USER");
   const [fullName, setFullName] = useState("");
   const [signUpEmail, setSignUpEmail] = useState("");
   const [signUpPassword, setSignUpPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [adminCode, setAdminCode] = useState("");
   const [showSignUpPassword, setShowSignUpPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
@@ -69,9 +65,6 @@ export default function LoginPage() {
     setSuccessMessage("");
     if (prefillEmail && nextMode === "signup") {
       setSignUpEmail(prefillEmail);
-      if (checkIsAdminEmail(prefillEmail)) {
-        setAccountType("ADMIN");
-      }
     }
   };
 
@@ -98,9 +91,10 @@ export default function LoginPage() {
         return;
       }
 
+      const targetPath = result.user?.role === "ADMIN" ? "/" : "/contact";
       setSuccessMessage("تم تسجيل الدخول بنجاح! جاري توجيهك...");
       setTimeout(() => {
-        router.push("/");
+        router.push(targetPath);
       }, 650);
     } catch {
       setErrorMessage("حدث خطأ أثناء تسجيل الدخول.");
@@ -134,12 +128,6 @@ export default function LoginPage() {
       return;
     }
 
-    const isPreauthorizedAdmin = checkIsAdminEmail(signUpEmail);
-    if (accountType === "ADMIN" && !isPreauthorizedAdmin && !adminCode.trim()) {
-      setErrorMessage("يرجى إدخال كود تفعيل الإدارة لإنشاء حساب مدير.");
-      return;
-    }
-
     setIsLoading(true);
     try {
       const result = await signUp({
@@ -147,8 +135,6 @@ export default function LoginPage() {
         email: signUpEmail.trim(),
         password: signUpPassword,
         confirmPassword,
-        accountType,
-        adminCode: adminCode.trim() || undefined,
       });
 
       if (!result.success) {
@@ -160,9 +146,10 @@ export default function LoginPage() {
         return;
       }
 
+      const targetPath = result.user?.role === "ADMIN" ? "/" : "/contact";
       setSuccessMessage("تم إنشاء الحساب وتسجيل الدخول بنجاح! جاري توجيهك...");
       setTimeout(() => {
-        router.push("/");
+        router.push(targetPath);
       }, 650);
     } catch {
       setErrorMessage("حدث خطأ غير متوقع أثناء إنشاء الحساب.");
@@ -170,7 +157,6 @@ export default function LoginPage() {
     }
   };
 
-  const isPreauthorizedAdminEmail = checkIsAdminEmail(signUpEmail);
   const passwordMismatch =
     confirmPassword.length > 0 && signUpPassword !== confirmPassword;
 
@@ -201,7 +187,7 @@ export default function LoginPage() {
           <p className="mt-1 text-xs text-slate-400">
             {mode === "signin"
               ? "أدخل البريد الإلكتروني وكلمة المرور للدخول إلى حسابك"
-              : "اختر نوع الحساب وأنشئ كلمة مرور آمنة للمستخدم أو المدير"}
+              : "أنشئ حسابك بالبريد الإلكتروني وكلمة المرور للدخول للمنصة"}
           </p>
         </div>
 
@@ -222,10 +208,10 @@ export default function LoginPage() {
             </div>
             <div className="flex items-center justify-center gap-4 mt-2">
               <Link
-                href="/"
+                href={isAdmin ? "/" : "/contact"}
                 className="text-xs text-emerald-400 hover:underline font-bold"
               >
-                الذهاب للوحة التحكم ←
+                {isAdmin ? "الذهاب للوحة التحكم ←" : "الذهاب لصفحة التواصل ←"}
               </Link>
               <button
                 type="button"
@@ -362,72 +348,12 @@ export default function LoginPage() {
                     onClick={() => switchMode("signup", email.trim())}
                     className="text-emerald-400 hover:underline font-bold"
                   >
-                    أنشئ حساباً الآن (مستخدم أو مدير)
+                    أنشئ حساباً جديداً الآن
                   </button>
                 </p>
               </form>
             ) : (
               <form onSubmit={handleSignUpSubmit} className="space-y-4">
-                {/* Account Type Selector */}
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-slate-300 font-semibold">
-                    نوع الحساب
-                  </Label>
-                  <div className="grid grid-cols-2 gap-2.5">
-                    <button
-                      type="button"
-                      onClick={() => setAccountType("USER")}
-                      className={cn(
-                        "p-3 rounded-xl border text-right transition-all space-y-1",
-                        accountType === "USER"
-                          ? "bg-emerald-500/15 border-emerald-500 text-white shadow-sm"
-                          : "bg-slate-800/60 border-slate-700 text-slate-300 hover:border-slate-600"
-                      )}
-                    >
-                      <div className="flex items-center gap-1.5 font-bold text-xs">
-                        <User
-                          className={cn(
-                            "w-3.5 h-3.5",
-                            accountType === "USER"
-                              ? "text-emerald-400"
-                              : "text-slate-400"
-                          )}
-                        />
-                        <span>مستخدم / عميل</span>
-                      </div>
-                      <p className="text-[10px] text-slate-400 leading-snug">
-                        للتواصل وحجز الاستشارات التأهيلية
-                      </p>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setAccountType("ADMIN")}
-                      className={cn(
-                        "p-3 rounded-xl border text-right transition-all space-y-1",
-                        accountType === "ADMIN"
-                          ? "bg-amber-500/15 border-amber-400 text-white shadow-sm"
-                          : "bg-slate-800/60 border-slate-700 text-slate-300 hover:border-slate-600"
-                      )}
-                    >
-                      <div className="flex items-center gap-1.5 font-bold text-xs">
-                        <ShieldCheck
-                          className={cn(
-                            "w-3.5 h-3.5",
-                            accountType === "ADMIN"
-                              ? "text-amber-400"
-                              : "text-slate-400"
-                          )}
-                        />
-                        <span>مدير / طبيب (Admin)</span>
-                      </div>
-                      <p className="text-[10px] text-slate-400 leading-snug">
-                        لإدارة الحالات والتمارين والبروتوكولات
-                      </p>
-                    </button>
-                  </div>
-                </div>
-
                 {/* Full Name */}
                 <div className="space-y-1.5">
                   <Label className="text-xs text-slate-300 font-semibold flex items-center gap-1.5">
@@ -459,33 +385,6 @@ export default function LoginPage() {
                     className="bg-slate-800/80 border-slate-700 text-white text-xs text-left dir-ltr rounded-xl h-11 placeholder:text-slate-500 focus:border-emerald-500"
                   />
                 </div>
-
-                {/* Admin Verification Info or Invite Code */}
-                {accountType === "ADMIN" && (
-                  isPreauthorizedAdminEmail ? (
-                    <div className="p-2.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[11px] flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
-                      <span>
-                        بريد إدارة معتمد — يمكنك تعيين كلمة المرور مباشرة بدون كود
-                      </span>
-                    </div>
-                  ) : (
-                    <div className="space-y-1.5">
-                      <Label className="text-xs text-amber-300 font-semibold flex items-center gap-1.5">
-                        <KeyRound className="w-3.5 h-3.5 text-amber-400" />
-                        <span>كود تفعيل الإدارة (Admin Code)</span>
-                      </Label>
-                      <Input
-                        type="text"
-                        required
-                        placeholder="أدخل كود تفعيل الإدارة"
-                        value={adminCode}
-                        onChange={(e) => setAdminCode(e.target.value)}
-                        className="bg-slate-800/80 border-amber-500/40 text-white text-xs text-left dir-ltr rounded-xl h-11 placeholder:text-slate-500 focus:border-amber-400"
-                      />
-                    </div>
-                  )
-                )}
 
                 {/* Password */}
                 <div className="space-y-1.5">
@@ -574,9 +473,7 @@ export default function LoginPage() {
                   }
                   className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs h-11 rounded-xl shadow-md shadow-emerald-600/20 transition-all"
                 >
-                  {isLoading
-                    ? "جاري إنشاء الحساب..."
-                    : "إنشاء الحساب وتسجيل الدخول"}
+                  {isLoading ? "جاري إنشاء الحساب..." : "إنشاء الحساب"}
                 </Button>
 
                 <p className="text-center text-[11px] text-slate-400 pt-1">
@@ -595,7 +492,7 @@ export default function LoginPage() {
 
           <CardFooter className="pt-0 justify-between text-xs text-slate-500 border-t border-slate-800/80 px-6 py-3">
             <Link
-              href="/"
+              href="/contact"
               className="hover:text-emerald-400 flex items-center gap-1 transition"
             >
               <span>تصفح كزائر</span>

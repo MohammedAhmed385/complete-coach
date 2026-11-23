@@ -4,7 +4,6 @@ import {
   Role,
   SESSION_COOKIE_NAME,
   checkIsAdminEmail,
-  getAdminSignupCode,
 } from "@/lib/auth-config";
 import {
   createSessionToken,
@@ -31,10 +30,6 @@ export async function POST(request: NextRequest) {
       typeof body.confirmPassword === "string"
         ? body.confirmPassword
         : undefined;
-    const accountType =
-      body.accountType === "ADMIN" ? "ADMIN" : "USER";
-    const adminCode =
-      typeof body.adminCode === "string" ? body.adminCode.trim() : "";
 
     if (rawName.length < 2) {
       return NextResponse.json(
@@ -82,23 +77,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    let assignedRole: Role = "CLIENT";
-    if (checkIsAdminEmail(normalizedEmail)) {
-      assignedRole = "ADMIN";
-    } else if (accountType === "ADMIN") {
-      if (!adminCode || adminCode !== getAdminSignupCode()) {
-        return NextResponse.json(
-          {
-            success: false,
-            code: "INVALID_ADMIN_CODE",
-            error:
-              "كود تفعيل حساب الإدارة غير صحيح. يرجى التحقق من الكود أو التسجيل بحساب مستخدم عادي.",
-          },
-          { status: 403 }
-        );
-      }
-      assignedRole = "ADMIN";
-    }
+    // Strict email-based role resolution: only the 3 authorized emails get ADMIN
+    const assignedRole: Role = checkIsAdminEmail(normalizedEmail)
+      ? "ADMIN"
+      : "CLIENT";
 
     const { hash, salt } = await hashPassword(password);
     const now = new Date().toISOString();
