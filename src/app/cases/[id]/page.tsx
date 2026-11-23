@@ -33,6 +33,9 @@ import {
   Share2,
   Pencil,
   Target,
+  ClipboardList,
+  Layers,
+  ArrowUpDown,
 } from "lucide-react";
 import {
   Card,
@@ -87,6 +90,19 @@ import {
   getJointLabel,
 } from "@/lib/utils";
 import { AdminGuard } from "@/components/auth/AdminGuard";
+import {
+  fetchMergedCaseById,
+  patchCaseWithSync,
+  removeLocalCase,
+  upsertLocalCase,
+  getDeletedExerciseIds,
+} from "@/lib/client-sync";
+import {
+  REHAB_PHASES,
+  detectInjuryCategory,
+  getDynamicPhaseCriteria,
+} from "@/lib/rehab-criteria";
+import { normalizeJointAngles, computeSessionComparison } from "@/lib/biomechanics";
 
 // TypeScript Interfaces for Patient Details
 interface ROMMeasurementItem {
@@ -167,7 +183,39 @@ interface ScheduleExerciseItem {
   targetReps: number;
   completedSets: number;
   completedReps: number;
+  completionPercentage: number;
+  holdSeconds?: number | null;
+  restSeconds?: number | null;
+  notes?: string | null;
   orderIndex: number;
+}
+
+interface SessionExerciseFormItem {
+  id: string;
+  exerciseId?: string;
+  nameAr: string;
+  nameEn?: string;
+  category?: string;
+  sets: number;
+  reps: number;
+  completionPercentage: number;
+  notes?: string | null;
+}
+
+interface PatientSessionItem {
+  id: string;
+  sessionNumber: number;
+  date: string;
+  title: string;
+  phase?: string;
+  durationMinutes?: number | null;
+  painLevel?: number | null;
+  overallCompletion?: number;
+  exercises: SessionExerciseFormItem[];
+  notes?: string | null;
+  extraDetails?: string | null;
+  createdAt: string;
+  updatedAt?: string;
 }
 
 interface ExerciseScheduleItem {
@@ -226,69 +274,19 @@ interface PatientDetail {
   status: string;
   createdAt: string;
   updatedAt: string;
+  isRestDay?: boolean;
+  phaseCriteriaStatus?: Record<string, Record<string, boolean>>;
   romMeasurements: ROMMeasurementItem[];
   girthMeasurements: GirthEvaluationItem[];
   girthEvaluations?: GirthEvaluationItem[];
   rehabPrograms: RehabProgramItem[];
+  assignedExercises?: ScheduleExerciseItem[];
+  sessions?: PatientSessionItem[];
   appointments: AppointmentDetailItem[];
   rtpEvaluations: RTPEvaluationItem[];
   exerciseSchedules: ExerciseScheduleItem[];
   videoAnalyses?: any[];
 }
-
-// Phase Transition Criteria Interface
-interface PhaseCriterion {
-  id: string;
-  phase: string;
-  textAr: string;
-  textEn: string;
-  met: boolean;
-}
-
-const DEFAULT_PHASE_CRITERIA: PhaseCriterion[] = [
-  {
-    id: "c1",
-    phase: "ACUTE_TO_ROM",
-    textAr: "استعادة المدى الحركي الكامل في البسط دون ألم (Full Passive Extension 0°)",
-    textEn: "Full passive extension with minimal effusion",
-    met: true,
-  },
-  {
-    id: "c2",
-    phase: "ACUTE_TO_ROM",
-    textAr: "ثني الركبة الفعال لا يقل عن 120 درجة (Active Knee Flexion ≥ 120°)",
-    textEn: "Active flexion at least 120 degrees",
-    met: true,
-  },
-  {
-    id: "c3",
-    phase: "ROM_TO_STRENGTH",
-    textAr: "انقباض كامل لعضلة الكواد دون أي تأخر في الرفع المستقيم (No Quad Lag in SLR)",
-    textEn: "Good quad activation without extension lag",
-    met: true,
-  },
-  {
-    id: "c4",
-    phase: "ROM_TO_STRENGTH",
-    textAr: "نمط مشي متماثل وسليم دون عكازات أو عرج (Normal Gait Pattern without Limp)",
-    textEn: "Normal symmetric gait pattern without crutches",
-    met: false,
-  },
-  {
-    id: "c5",
-    phase: "STRENGTH_TO_FUNCTIONAL",
-    textAr: "مستوى الألم لا يتجاوز 2 من 10 أثناء الأنشطة اليومية (VAS Pain Score ≤ 2/10)",
-    textEn: "VAS score <= 2/10 in daily activities",
-    met: true,
-  },
-  {
-    id: "c6",
-    phase: "STRENGTH_TO_FUNCTIONAL",
-    textAr: "فارق محيط الفخذ أقل من 10% مقارنة بالجانب السليم (Thigh Girth Deficit < 10%)",
-    textEn: "Limb symmetry index >= 90% for thigh girth",
-    met: false,
-  },
-];
 
 const RECURRING_DAYS_MAP: Record<string, string> = {
   SUN: "الأحد",
@@ -318,17 +316,65 @@ function PatientDetailPageContent() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Active tab state
+  // Active tab state & toast banner
   const [activeTab, setActiveTab] = useState("overview");
+  const [toastBanner, setToastBanner] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const showToast = (type: "success" | "error", text: string) => {
+    setToastBanner({ type, text });
+    setTimeout(() => {
+      setToastBanner((prev) => (prev?.text === text ? null : prev));
+    }, 4500);
+  };
 
   // Exercise Schedule Interactive State
   const [isRestDay, setIsRestDay] = useState(false);
   const [dailyExercises, setDailyExercises] = useState<ScheduleExerciseItem[]>([]);
   const [copiedSchedule, setCopiedSchedule] = useState(false);
 
-  // Phase Transition Checklist State
-  const [criteria, setCriteria] = useState<PhaseCriterion[]>(DEFAULT_PHASE_CRITERIA);
-  const [isAdvancingPhase, setIsAdvancingPhase] = useState(false);
+  // Add Multi-Exercise Picker Modal State
+  const [isAddExercisesModalOpen, setIsAddExercisesModalOpen] = useState(false);
+  const [libraryExercises, setLibraryExercises] = useState<ExerciseItem[]>([]);
+  const [isLoadingLibrary, setIsLoadingLibrary] = useState(false);
+  const [librarySearch, setLibrarySearch] = useState("");
+  const [libraryRegion, setLibraryRegion] = useState("ALL");
+  const [selectedLibraryMap, setSelectedLibraryMap] = useState<
+    Record<string, { selected: boolean; sets: number; reps: number; completionPercentage: number; notes: string; exercise: ExerciseItem }>
+  >({});
+  const [customExNameAr, setCustomExNameAr] = useState("");
+  const [customExNameEn, setCustomExNameEn] = useState("");
+  const [customExCategory, setCustomExCategory] = useState("تأهيل مخصص");
+  const [isSavingExercises, setIsSavingExercises] = useState(false);
+
+  // Full Cumulative Sessions Log State
+  const [sessionSortOrder, setSessionSortOrder] = useState<"asc" | "desc">("asc");
+  const [isSessionModalOpen, setIsSessionModalOpen] = useState(false);
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [sessionDate, setSessionDate] = useState(() => new Date().toISOString().split("T")[0]);
+  const [sessionTitle, setSessionTitle] = useState("");
+  const [sessionPhase, setSessionPhase] = useState("ACUTE");
+  const [sessionDuration, setSessionDuration] = useState("45");
+  const [sessionPainLevel, setSessionPainLevel] = useState("2");
+  const [sessionNotes, setSessionNotes] = useState("");
+  const [sessionExtraDetails, setSessionExtraDetails] = useState("");
+  const [sessionExercisesForm, setSessionExercisesForm] = useState<SessionExerciseFormItem[]>([]);
+  const [sessionExPickerId, setSessionExPickerId] = useState("");
+  const [sessionCustomExName, setSessionCustomExName] = useState("");
+  const [isSavingSession, setIsSavingSession] = useState(false);
+
+  // Add New Girth Measurement Modal State
+  const [isAddGirthOpen, setIsAddGirthOpen] = useState(false);
+  const [girthLandmark, setGirthLandmark] = useState("أعلى الرضفة — عضلة الفخذ (Above Patella / Thigh)");
+  const [girthDateInput, setGirthDateInput] = useState(() => new Date().toISOString().split("T")[0]);
+  const [girthRowsInput, setGirthRowsInput] = useState<
+    Array<{ distanceCm: number; injuredCm: string; healthyCm: string }>
+  >([
+    { distanceCm: 0, injuredCm: "", healthyCm: "" },
+    { distanceCm: 15, injuredCm: "", healthyCm: "" },
+    { distanceCm: 30, injuredCm: "", healthyCm: "" },
+  ]);
+  const [isSavingGirth, setIsSavingGirth] = useState(false);
+
+  // Phase Transition State
   const [advanceSuccess, setAdvanceSuccess] = useState(false);
 
   // ROM Filter State
@@ -366,7 +412,9 @@ function PatientDetailPageContent() {
     name: "",
     phone: "",
     email: "",
+    dateOfBirth: "",
     gender: "male",
+    status: "active",
     injuryType: "",
     injuredSide: "RIGHT",
     injuryDate: "",
@@ -383,7 +431,9 @@ function PatientDetailPageContent() {
         name: patient.name || "",
         phone: patient.phone || "",
         email: patient.email || "",
+        dateOfBirth: patient.dateOfBirth ? patient.dateOfBirth.split("T")[0] : "",
         gender: patient.gender || "male",
+        status: patient.status || "active",
         injuryType: patient.injuryType || "",
         injuredSide: patient.injuredSide || "RIGHT",
         injuryDate: patient.injuryDate ? patient.injuryDate.split("T")[0] : "",
@@ -397,85 +447,30 @@ function PatientDetailPageContent() {
     }
   }, [patient]);
 
-  // Fetch Patient Details
-  const fetchPatientDetails = async () => {
-    if (!id) return;
-    setIsLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(`/api/cases/${id}`);
-      if (!res.ok) {
-        // Fallback to localStorage
-        if (typeof window !== "undefined") {
-          try {
-            const localCases = JSON.parse(localStorage.getItem("revive_cases") || "[]");
-            const found = localCases.find((c: any) => c.id === id);
-            if (found) {
-              setPatient(found);
-              initExercisesFromProgram(found);
-              setIsLoading(false);
-              return;
-            }
-          } catch {}
-        }
-        if (res.status === 404) {
-          throw new Error("لم يتم العثور على سجل المريض المطلوب");
-        }
-        throw new Error("حدث خطأ أثناء تحميل بيانات المريض");
-      }
-      const data: PatientDetail = await res.json();
-
-      // Ensure RTP and Video Analysis records are loaded
-      let rtpList = data.rtpEvaluations || [];
-      let videoList = data.videoAnalyses || [];
-      try {
-        const [rtpRes, vaRes] = await Promise.all([
-          fetch(`/api/rtp?patientId=${id}`).catch(() => null),
-          fetch(`/api/video-analysis?patientId=${id}`).catch(() => null),
-        ]);
-        if (rtpRes && rtpRes.ok) {
-          const rtpArr = await rtpRes.json().catch(() => []);
-          if (Array.isArray(rtpArr) && rtpArr.length > 0) rtpList = rtpArr;
-        }
-        if (vaRes && vaRes.ok) {
-          const vaArr = await vaRes.json().catch(() => []);
-          if (Array.isArray(vaArr) && vaArr.length > 0) videoList = vaArr;
-        }
-      } catch (subErr) {
-        console.warn("Sub-records fetch skipped:", subErr);
-      }
-
-      const mergedPatient: PatientDetail = {
-        ...data,
-        rtpEvaluations: rtpList,
-        videoAnalyses: videoList,
-      };
-
-      setPatient(mergedPatient);
-
-      // Initialize daily exercises
-      if (data.exerciseSchedules?.length > 0) {
-        const latestSchedule = data.exerciseSchedules[0];
-        setIsRestDay(latestSchedule.isRestDay);
-        if (latestSchedule.exercises?.length > 0) {
-          setDailyExercises(latestSchedule.exercises);
-        } else {
-          initExercisesFromProgram(data);
-        }
-      } else {
-        initExercisesFromProgram(data);
-      }
-    } catch (err: any) {
-      console.error("Error fetching patient details:", err);
-      setError(err.message || "فشل الاتصال بالخادم");
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
+  // Helper: Resolve exercises ONLY from patient record (starts completely empty until doctor adds)
   const initExercisesFromProgram = (data: PatientDetail) => {
+    if (Array.isArray(data.assignedExercises)) {
+      setDailyExercises(
+        data.assignedExercises.map((ex, idx) => ({
+          ...ex,
+          targetSets: Number(ex.targetSets) || 3,
+          targetReps: Number(ex.targetReps) || 10,
+          completedSets: Number(ex.completedSets) || 0,
+          completedReps: Number(ex.completedReps) || 0,
+          completionPercentage:
+            ex.completionPercentage !== undefined
+              ? Number(ex.completionPercentage)
+              : Number(ex.targetSets) > 0 && Number(ex.completedSets) > 0
+              ? Math.min(100, Math.round((Number(ex.completedSets) / Number(ex.targetSets)) * 100))
+              : 0,
+          orderIndex: ex.orderIndex ?? idx,
+        }))
+      );
+      return;
+    }
+
     const activeProgram = data.rehabPrograms?.[0];
-    if (activeProgram?.programExercises?.length > 0) {
+    if (activeProgram?.programExercises && activeProgram.programExercises.length > 0) {
       const mapped: ScheduleExerciseItem[] = activeProgram.programExercises.map((pe) => ({
         id: pe.id,
         exerciseId: pe.exerciseId,
@@ -484,68 +479,82 @@ function PatientDetailPageContent() {
         targetReps: pe.reps || 10,
         completedSets: 0,
         completedReps: 0,
+        completionPercentage: 0,
+        holdSeconds: pe.holdSeconds ?? null,
+        restSeconds: pe.restSeconds ?? null,
+        notes: pe.notes ?? null,
         orderIndex: pe.orderIndex,
       }));
       setDailyExercises(mapped);
-    } else {
-      // Default initial exercises if none in DB
-      setDailyExercises([
-        {
-          id: "ex-1",
-          exerciseId: "sample-1",
-          exercise: {
-            id: "sample-1",
-            nameAr: "تقوية العضلة الرباعية متساوية القياس",
-            nameEn: "Quadriceps Isometric Sets",
-            region: "LOWER",
-            category: "Quadriceps",
-            isIsometric: true,
-            isometricAngle: 60,
-            instructions: "الضغط بقوة نحو الأسفل لتثبيت مد الركبة لمدة 5-8 ثوانٍ.",
-          },
-          targetSets: 3,
-          targetReps: 12,
-          completedSets: 1,
-          completedReps: 12,
-          orderIndex: 0,
-        },
-        {
-          id: "ex-2",
-          exerciseId: "sample-2",
-          exercise: {
-            id: "sample-2",
-            nameAr: "رفع الساق المستقيمة (SLR)",
-            nameEn: "Straight Leg Raise",
-            region: "LOWER",
-            category: "Hip Flexors / Quad",
-            isIsometric: false,
-            instructions: "رفع الساق بزاوية 45 درجة مع إحكام مد الركبة بالكامل.",
-          },
-          targetSets: 3,
-          targetReps: 10,
-          completedSets: 2,
-          completedReps: 10,
-          orderIndex: 1,
-        },
-        {
-          id: "ex-3",
-          exerciseId: "sample-3",
-          exercise: {
-            id: "sample-3",
-            nameAr: "تمرين الجسر لتفعيل الهامسترنج والأرداف",
-            nameEn: "Glute Bridges & Pelvic Lift",
-            region: "LOWER",
-            category: "Hamstrings / Glutes",
-            isIsometric: false,
-            instructions: "رفع الحوض مع الضغط على الكعبين وتثبيت ثانيتين في القمة.",
-          },
-          targetSets: 4,
-          targetReps: 12,
-          completedSets: 0,
-          completedReps: 0,
-          orderIndex: 2,
-        },
-      ]);
+      return;
+    }
+
+    if (data.exerciseSchedules && data.exerciseSchedules[0]?.exercises?.length > 0) {
+      setDailyExercises(
+        data.exerciseSchedules[0].exercises.map((item, idx) => ({
+          ...item,
+          completionPercentage:
+            item.completionPercentage ??
+            (item.targetSets > 0 ? Math.min(100, Math.round((item.completedSets / item.targetSets) * 100)) : 0),
+          orderIndex: item.orderIndex ?? idx,
+        }))
+      );
+      return;
+    }
+
+    setDailyExercises([]);
+  };
+
+  // Fetch Patient Details (Unified Server + Local Sync)
+  const fetchPatientDetails = async () => {
+    if (!id) return;
+    setIsLoading(true);
+    setError(null);
+    try {
+      const mergedPatient = await fetchMergedCaseById(id);
+      if (!mergedPatient) {
+        throw new Error("لم يتم العثور على سجل المريض المطلوب");
+      }
+      setPatient(mergedPatient);
+      setIsRestDay(
+        mergedPatient.isRestDay !== undefined
+          ? Boolean(mergedPatient.isRestDay)
+          : Boolean(mergedPatient.exerciseSchedules?.[0]?.isRestDay)
+      );
+      initExercisesFromProgram(mergedPatient);
+    } catch (err: any) {
+      console.error("Error fetching patient details:", err);
+      setError(err.message || "فشل الاتصال بالخادم");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Load Exercise Library for Picker Modals
+  const loadExerciseLibrary = async () => {
+    setIsLoadingLibrary(true);
+    try {
+      const res = await fetch("/api/exercises").catch(() => null);
+      const data = res && res.ok ? await res.json().catch(() => []) : [];
+      const serverList: ExerciseItem[] = Array.isArray(data) ? data : data.exercises || [];
+      let localCustom: ExerciseItem[] = [];
+      if (typeof window !== "undefined") {
+        try {
+          localCustom = JSON.parse(localStorage.getItem("revive_custom_exercises") || "[]");
+        } catch {}
+      }
+      const deletedSet = new Set(getDeletedExerciseIds());
+      const map = new Map<string, ExerciseItem>();
+      [...localCustom, ...serverList].forEach((ex) => {
+        if (ex && ex.id && !deletedSet.has(ex.id)) {
+          map.set(ex.id, ex);
+        }
+      });
+      setLibraryExercises(Array.from(map.values()));
+    } catch (err) {
+      console.warn("Library load skipped:", err);
+    } finally {
+      setIsLoadingLibrary(false);
     }
   };
 
@@ -553,7 +562,45 @@ function PatientDetailPageContent() {
     fetchPatientDetails();
   }, [id]);
 
-  // WhatsApp Summary Message
+  // Dynamic Criteria Calculation (adapts to Active Phase & Injury Type)
+  const currentPhaseKey = patient?.rehabPrograms?.[0]?.phase || "ACUTE";
+  const injuryCategoryMeta = useMemo(
+    () => detectInjuryCategory(patient?.injuryType),
+    [patient?.injuryType]
+  );
+
+  const dynamicCriteria = useMemo(() => {
+    const raw = getDynamicPhaseCriteria(currentPhaseKey, patient?.injuryType);
+    const savedMap = patient?.phaseCriteriaStatus?.[currentPhaseKey] || {};
+    return raw.map((c) => ({
+      ...c,
+      met: Boolean(savedMap[c.id]),
+    }));
+  }, [currentPhaseKey, patient?.injuryType, patient?.phaseCriteriaStatus]);
+
+  const previewModalCriteria = useMemo(() => {
+    return getDynamicPhaseCriteria(selectedNewPhase, patient?.injuryType);
+  }, [selectedNewPhase, patient?.injuryType]);
+
+  const criteriaMetCount = dynamicCriteria.filter((c) => c.met).length;
+  const criteriaProgressPct =
+    dynamicCriteria.length > 0 ? Math.round((criteriaMetCount / dynamicCriteria.length) * 100) : 0;
+
+  const handleToggleCriterion = async (criterionId: string) => {
+    if (!patient) return;
+    const prevPhaseMap = patient.phaseCriteriaStatus?.[currentPhaseKey] || {};
+    const nextPhaseCriteriaStatus = {
+      ...(patient.phaseCriteriaStatus || {}),
+      [currentPhaseKey]: {
+        ...prevPhaseMap,
+        [criterionId]: !prevPhaseMap[criterionId],
+      },
+    };
+    const updated = await patchCaseWithSync(patient, { phaseCriteriaStatus: nextPhaseCriteriaStatus });
+    setPatient(updated);
+  };
+
+  // WhatsApp Summary Message (عيادة Revive)
   const handleSendWhatsApp = () => {
     if (!patient) return;
     const currentPhase = patient.rehabPrograms?.[0]?.phase || "ACUTE";
@@ -566,7 +613,7 @@ function PatientDetailPageContent() {
         : "كلا الجانبين (Bilateral)";
 
     const messageLines = [
-      `*تقرير حالة مريض — Peak Motion* 🩺`,
+      `*تقرير حالة مريض — عيادة Revive* 🩺`,
       `━━━━━━━━━━━━━━━━━━━━`,
       `👤 *اسم المريض:* ${patient.name}`,
       `🏥 *التشخيص:* ${patient.injuryType}`,
@@ -579,12 +626,33 @@ function PatientDetailPageContent() {
       patient.phone ? `📞 *الهاتف:* ${patient.phone}` : null,
       patient.notes ? `📝 *ملاحظات الأخصائي:* ${patient.notes}` : null,
       `━━━━━━━━━━━━━━━━━━━━`,
-      `عيادة Peak Motion للعلاج الطبيعي والتأهيل الحركي`,
+      `عيادة Revive للعلاج الطبيعي والتأهيل الحركي`,
     ].filter(Boolean);
 
     const message = messageLines.join("\n");
     const link = generateWhatsAppShareLink(message);
     window.open(link, "_blank");
+  };
+
+  // WhatsApp Exercises Share (عيادة Revive)
+  const handleShareExercisesWhatsApp = () => {
+    if (!patient) return;
+    let message = "";
+    if (isRestDay) {
+      message = `*جدول التأهيل الحركي — عيادة Revive*\n👤 المريض: ${patient.name}\n📅 التاريخ: ${new Date().toLocaleDateString("ar-EG")}\n\n🧘‍♂️ اليوم مخصص للراحة النشطة والاستشفاء العضلي.\n━━━━━━━━━━━━━━━━━━━━\nعيادة Revive للعلاج الطبيعي والتأهيل الحركي`;
+    } else if (dailyExercises.length === 0) {
+      showToast("error", "لا توجد تمارين مضافة لمشاركتها بعد.");
+      return;
+    } else {
+      const itemsText = dailyExercises
+        .map((ex, i) => {
+          const pct = ex.completionPercentage ?? 0;
+          return `${i + 1}. *${ex.exercise?.nameAr || "تمرين"}*${ex.exercise?.nameEn ? ` (${ex.exercise.nameEn})` : ""}\n   🎯 الجرعة: ${ex.targetSets} مجموعات × ${ex.targetReps} تكرار\n   📊 نسبة الإنجاز: ${pct}% (${ex.completedSets}/${ex.targetSets} مجموعات)${ex.notes ? `\n   📝 ملاحظة: ${ex.notes}` : ""}`;
+        })
+        .join("\n\n");
+      message = `*برنامج التمارين التأهيلية — عيادة Revive* 🏋️‍♂️\n👤 *المريض:* ${patient.name}\n🏥 *التشخيص:* ${patient.injuryType}\n━━━━━━━━━━━━━━━━━━━━\n${itemsText}\n━━━━━━━━━━━━━━━━━━━━\nعيادة Revive للعلاج الطبيعي والتأهيل الحركي`;
+    }
+    window.open(generateWhatsAppShareLink(message), "_blank");
   };
 
   // Schedule Appointment Submit
@@ -618,6 +686,7 @@ function PatientDetailPageContent() {
       setIsSchedulerOpen(false);
       setAppointmentNotes("");
       setRecurringDays([]);
+      showToast("success", "تم حجز الموعد وإضافته لملف المريض بنجاح.");
       fetchPatientDetails();
     } catch (err: any) {
       console.error("Error creating appointment:", err);
@@ -632,54 +701,253 @@ function PatientDetailPageContent() {
     if (!patient) return;
     setIsDeleting(true);
     try {
-      const res = await fetch(`/api/cases/${patient.id}`, { method: "DELETE" });
-      if (!res.ok) {
-        throw new Error("فشل حذف ملف المريض");
-      }
+      await fetch(`/api/cases/${patient.id}`, { method: "DELETE" }).catch(() => null);
+      removeLocalCase(patient.id);
       router.push("/cases");
     } catch (err: any) {
       console.error("Delete error:", err);
-      alert(err.message || "حدث خطأ أثناء الحذف");
+      showToast("error", err.message || "حدث خطأ أثناء الحذف");
       setIsDeleting(false);
     }
   };
 
-  // Exercise Counters (+1 / -1)
+  // Rest Day Switch Handler
+  const handleToggleRestDay = async (checked: boolean) => {
+    setIsRestDay(checked);
+    if (!patient) return;
+    const updated = await patchCaseWithSync(patient, { isRestDay: checked });
+    setPatient(updated);
+  };
+
+  // Persist Single Exercise Update
+  const syncExerciseItemUpdate = async (
+    nextList: ScheduleExerciseItem[],
+    itemId: string,
+    updates: Partial<ScheduleExerciseItem>
+  ) => {
+    setDailyExercises(nextList);
+    if (!patient) return;
+    const nextPatient = { ...patient, assignedExercises: nextList, updatedAt: new Date().toISOString() };
+    setPatient(nextPatient);
+    upsertLocalCase(nextPatient);
+    try {
+      await fetch(`/api/cases/${patient.id}/exercises`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          exerciseItemId: itemId,
+          updates,
+          assignedExercises: nextList,
+          _baseSnapshot: nextPatient,
+        }),
+      });
+    } catch (err) {
+      console.warn("Exercise update sync skipped:", err);
+    }
+  };
+
+  // Exercise Counters (+1 / -1) & Completion %
   const handleUpdateSets = (index: number, delta: number) => {
-    setDailyExercises((prev) =>
-      prev.map((item, idx) => {
-        if (idx !== index) return item;
-        const newSets = Math.max(0, item.completedSets + delta);
-        return { ...item, completedSets: newSets };
-      })
+    const targetItem = dailyExercises[index];
+    if (!targetItem) return;
+    const newSets = Math.max(0, targetItem.completedSets + delta);
+    const pct =
+      targetItem.targetSets > 0
+        ? Math.min(100, Math.round((newSets / targetItem.targetSets) * 100))
+        : targetItem.completionPercentage;
+    const nextList = dailyExercises.map((item, idx) =>
+      idx === index ? { ...item, completedSets: newSets, completionPercentage: pct } : item
     );
+    syncExerciseItemUpdate(nextList, targetItem.id, { completedSets: newSets, completionPercentage: pct });
   };
 
   const handleUpdateReps = (index: number, delta: number) => {
-    setDailyExercises((prev) =>
-      prev.map((item, idx) => {
-        if (idx !== index) return item;
-        const newReps = Math.max(0, item.completedReps + delta);
-        return { ...item, completedReps: newReps };
-      })
+    const targetItem = dailyExercises[index];
+    if (!targetItem) return;
+    const newReps = Math.max(0, targetItem.completedReps + delta);
+    const nextList = dailyExercises.map((item, idx) =>
+      idx === index ? { ...item, completedReps: newReps } : item
     );
+    syncExerciseItemUpdate(nextList, targetItem.id, { completedReps: newReps });
   };
 
-  // Copy Exercise Schedule to Clipboard
+  const handleUpdateTargetDosage = (index: number, field: "targetSets" | "targetReps", value: number) => {
+    const targetItem = dailyExercises[index];
+    if (!targetItem) return;
+    const clamped = Math.max(1, value || 1);
+    const nextList = dailyExercises.map((item, idx) =>
+      idx === index ? { ...item, [field]: clamped } : item
+    );
+    syncExerciseItemUpdate(nextList, targetItem.id, { [field]: clamped });
+  };
+
+  const handleUpdateCompletionPct = (index: number, pctValue: number) => {
+    const targetItem = dailyExercises[index];
+    if (!targetItem) return;
+    const clamped = Math.min(100, Math.max(0, Math.round(pctValue)));
+    const nextList = dailyExercises.map((item, idx) =>
+      idx === index ? { ...item, completionPercentage: clamped } : item
+    );
+    syncExerciseItemUpdate(nextList, targetItem.id, { completionPercentage: clamped });
+  };
+
+  // Delete Assigned Exercise from Patient Schedule
+  const handleDeleteAssignedExercise = async (exerciseItemId: string) => {
+    if (!patient) return;
+    const nextList = dailyExercises.filter((item) => item.id !== exerciseItemId);
+    setDailyExercises(nextList);
+    const nextPatient = {
+      ...patient,
+      assignedExercises: nextList,
+      updatedAt: new Date().toISOString(),
+    };
+    setPatient(nextPatient);
+    upsertLocalCase(nextPatient);
+    showToast("success", "تم حذف التمرين من برنامج المريض وتحديث الملف.");
+
+    try {
+      await fetch(
+        `/api/cases/${patient.id}/exercises?exerciseItemId=${encodeURIComponent(exerciseItemId)}`,
+        {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ exerciseItemId, _baseSnapshot: nextPatient }),
+        }
+      );
+    } catch (err) {
+      console.warn("Delete exercise server sync skipped:", err);
+    }
+  };
+
+  // Open Multi-Exercise Picker Modal
+  const handleOpenAddExercisesModal = () => {
+    setSelectedLibraryMap({});
+    setLibrarySearch("");
+    setLibraryRegion("ALL");
+    setCustomExNameAr("");
+    setCustomExNameEn("");
+    setIsAddExercisesModalOpen(true);
+    loadExerciseLibrary();
+  };
+
+  const handleToggleLibraryPick = (ex: ExerciseItem) => {
+    setSelectedLibraryMap((prev) => {
+      const existing = prev[ex.id];
+      if (existing?.selected) {
+        const copy = { ...prev };
+        delete copy[ex.id];
+        return copy;
+      }
+      return {
+        ...prev,
+        [ex.id]: {
+          selected: true,
+          sets: 3,
+          reps: 10,
+          completionPercentage: 0,
+          notes: "",
+          exercise: ex,
+        },
+      };
+    });
+  };
+
+  const handleAddCustomExerciseToSelection = () => {
+    if (!customExNameAr.trim()) return;
+    const customId = `custom-ex-${Date.now()}`;
+    const newEx: ExerciseItem = {
+      id: customId,
+      nameAr: customExNameAr.trim(),
+      nameEn: customExNameEn.trim() || customExNameAr.trim(),
+      region: "LOWER",
+      category: customExCategory.trim() || "تأهيل مخصص",
+      isIsometric: false,
+    };
+    setLibraryExercises((prev) => [newEx, ...prev]);
+    setSelectedLibraryMap((prev) => ({
+      ...prev,
+      [customId]: {
+        selected: true,
+        sets: 3,
+        reps: 12,
+        completionPercentage: 0,
+        notes: "",
+        exercise: newEx,
+      },
+    }));
+    setCustomExNameAr("");
+    setCustomExNameEn("");
+  };
+
+  const handleSaveSelectedExercises = async () => {
+    if (!patient) return;
+    const chosen = Object.values(selectedLibraryMap).filter((item) => item.selected);
+    if (chosen.length === 0) {
+      showToast("error", "يرجى تحديد تمرين واحد على الأقل للإضافة.");
+      return;
+    }
+    setIsSavingExercises(true);
+    try {
+      const payloadItems = chosen.map((item, idx) => ({
+        id: `pex-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 5)}`,
+        exerciseId: item.exercise.id,
+        exercise: item.exercise,
+        targetSets: Math.max(1, Number(item.sets) || 3),
+        targetReps: Math.max(1, Number(item.reps) || 10),
+        completedSets: 0,
+        completedReps: 0,
+        completionPercentage: Math.min(100, Math.max(0, Number(item.completionPercentage) || 0)),
+        notes: item.notes?.trim() || null,
+        orderIndex: dailyExercises.length + idx,
+      }));
+
+      let updatedExercisesList = [...dailyExercises, ...payloadItems];
+      try {
+        const res = await fetch(`/api/cases/${patient.id}/exercises`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ exercises: payloadItems, _baseSnapshot: patient }),
+        });
+        if (res.ok) {
+          const data = await res.json().catch(() => null);
+          if (Array.isArray(data?.exercises)) {
+            updatedExercisesList = data.exercises;
+          }
+        }
+      } catch (err) {
+        console.warn("Add exercises server sync fallback:", err);
+      }
+
+      setDailyExercises(updatedExercisesList);
+      const nextPatient = {
+        ...patient,
+        assignedExercises: updatedExercisesList,
+        updatedAt: new Date().toISOString(),
+      };
+      setPatient(nextPatient);
+      upsertLocalCase(nextPatient);
+      setIsAddExercisesModalOpen(false);
+      showToast("success", `تمت إضافة ${chosen.length} تمرين إلى جدول المريض بنجاح!`);
+    } finally {
+      setIsSavingExercises(false);
+    }
+  };
+
+  // Copy Exercise Schedule to Clipboard (عيادة Revive)
   const handleCopySchedule = () => {
     if (!patient) return;
 
     let textToCopy = "";
     if (isRestDay) {
-      textToCopy = `*جدول التأهيل الحركي — Peak Motion*\nالمريض: ${patient.name}\nالتاريخ: ${new Date().toLocaleDateString("ar-EG")}\n\n🧘‍♂️ اليوم مخصص للراحة النشطة والاستشفاء العضلي (Active Rest & Recovery Day).`;
+      textToCopy = `*جدول التأهيل الحركي — عيادة Revive*\nالمريض: ${patient.name}\nالتاريخ: ${new Date().toLocaleDateString("ar-EG")}\n\n🧘‍♂️ اليوم مخصص للراحة النشطة والاستشفاء العضلي (Active Rest & Recovery Day).`;
     } else {
       const itemsText = dailyExercises
         .map((ex, i) => {
-          return `${i + 1}. *${ex.exercise?.nameAr || "تمرين"}* (${ex.exercise?.nameEn || ""})\n   🎯 المستهدف: ${ex.targetSets} مجموعات × ${ex.targetReps} تكرار\n   ✅ المنجز: ${ex.completedSets}/${ex.targetSets} مجموعات (${ex.completedReps} تكرار)`;
+          return `${i + 1}. *${ex.exercise?.nameAr || "تمرين"}* (${ex.exercise?.nameEn || ""})\n   🎯 المستهدف: ${ex.targetSets} مجموعات × ${ex.targetReps} تكرار\n   ✅ المنجز: ${ex.completedSets}/${ex.targetSets} مجموعات (${ex.completionPercentage ?? 0}% إنجاز)`;
         })
         .join("\n\n");
 
-      textToCopy = `*جدول التمارين اليومي — Peak Motion* 🏋️‍♂️\nالمريض: ${patient.name}\nالتاريخ: ${new Date().toLocaleDateString("ar-EG")}\n━━━━━━━━━━━━━━━━━━━━\n${itemsText}\n━━━━━━━━━━━━━━━━━━━━\nعيادة Peak Motion للعلاج الطبيعي`;
+      textToCopy = `*جدول التمارين — عيادة Revive* 🏋️‍♂️\nالمريض: ${patient.name}\nالتاريخ: ${new Date().toLocaleDateString("ar-EG")}\n━━━━━━━━━━━━━━━━━━━━\n${itemsText}\n━━━━━━━━━━━━━━━━━━━━\nعيادة Revive للعلاج الطبيعي والتأهيل الحركي`;
     }
 
     navigator.clipboard.writeText(textToCopy);
@@ -687,14 +955,285 @@ function PatientDetailPageContent() {
     setTimeout(() => setCopiedSchedule(false), 2500);
   };
 
-  // Phase Transition Progress
-  const criteriaMetCount = criteria.filter((c) => c.met).length;
-  const criteriaProgressPct = Math.round((criteriaMetCount / criteria.length) * 100);
-
-  const handleToggleCriterion = (criterionId: string) => {
-    setCriteria((prev) =>
-      prev.map((c) => (c.id === criterionId ? { ...c, met: !c.met } : c))
+  // Sessions Log Handlers
+  const orderedSessions = useMemo(() => {
+    const list = [...(patient?.sessions || [])];
+    list.sort((a, b) =>
+      sessionSortOrder === "asc"
+        ? (a.sessionNumber || 0) - (b.sessionNumber || 0)
+        : (b.sessionNumber || 0) - (a.sessionNumber || 0)
     );
+    return list;
+  }, [patient?.sessions, sessionSortOrder]);
+
+  const openNewSessionModal = () => {
+    if (!patient) return;
+    loadExerciseLibrary();
+    const nextNum = (patient.sessions || []).reduce((m, s) => Math.max(m, s.sessionNumber || 0), 0) + 1;
+    setEditingSessionId(null);
+    setSessionDate(new Date().toISOString().split("T")[0]);
+    setSessionTitle(`جلسة تأهيل #${nextNum}`);
+    setSessionPhase(patient.rehabPrograms?.[0]?.phase || "ACUTE");
+    setSessionDuration("45");
+    setSessionPainLevel("2");
+    setSessionNotes("");
+    setSessionExtraDetails("");
+    setSessionExPickerId("");
+    setSessionCustomExName("");
+    setSessionExercisesForm(
+      dailyExercises.map((ex, idx) => ({
+        id: `sex-${Date.now()}-${idx}`,
+        exerciseId: ex.exerciseId,
+        nameAr: ex.exercise?.nameAr || "تمرين",
+        nameEn: ex.exercise?.nameEn || "",
+        category: ex.exercise?.category || "تأهيل",
+        sets: ex.targetSets || 3,
+        reps: ex.targetReps || 10,
+        completionPercentage: ex.completionPercentage ?? 100,
+        notes: ex.notes || "",
+      }))
+    );
+    setIsSessionModalOpen(true);
+  };
+
+  const openEditSessionModal = (sess: PatientSessionItem) => {
+    loadExerciseLibrary();
+    setEditingSessionId(sess.id);
+    setSessionDate(sess.date ? sess.date.split("T")[0] : new Date().toISOString().split("T")[0]);
+    setSessionTitle(sess.title || `جلسة تأهيل #${sess.sessionNumber}`);
+    setSessionPhase(sess.phase || patient?.rehabPrograms?.[0]?.phase || "ACUTE");
+    setSessionDuration(sess.durationMinutes ? String(sess.durationMinutes) : "45");
+    setSessionPainLevel(sess.painLevel !== null && sess.painLevel !== undefined ? String(sess.painLevel) : "2");
+    setSessionNotes(sess.notes || "");
+    setSessionExtraDetails(sess.extraDetails || "");
+    setSessionExPickerId("");
+    setSessionCustomExName("");
+    setSessionExercisesForm((sess.exercises || []).map((ex) => ({ ...ex })));
+    setIsSessionModalOpen(true);
+  };
+
+  const handleImportScheduleToSession = () => {
+    const imported: SessionExerciseFormItem[] = dailyExercises.map((ex, idx) => ({
+      id: `sex-imp-${Date.now()}-${idx}`,
+      exerciseId: ex.exerciseId,
+      nameAr: ex.exercise?.nameAr || "تمرين",
+      nameEn: ex.exercise?.nameEn || "",
+      category: ex.exercise?.category || "تأهيل",
+      sets: ex.targetSets || 3,
+      reps: ex.targetReps || 10,
+      completionPercentage: ex.completionPercentage ?? 100,
+      notes: ex.notes || "",
+    }));
+    setSessionExercisesForm((prev) => [...prev, ...imported]);
+  };
+
+  const handleAddLibraryExerciseToSession = (exId: string) => {
+    if (!exId) return;
+    const found = libraryExercises.find((e) => e.id === exId);
+    if (!found) return;
+    setSessionExercisesForm((prev) => [
+      ...prev,
+      {
+        id: `sex-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+        exerciseId: found.id,
+        nameAr: found.nameAr,
+        nameEn: found.nameEn,
+        category: found.category,
+        sets: 3,
+        reps: 10,
+        completionPercentage: 100,
+        notes: "",
+      },
+    ]);
+    setSessionExPickerId("");
+  };
+
+  const handleAddCustomExerciseToSession = () => {
+    if (!sessionCustomExName.trim()) return;
+    setSessionExercisesForm((prev) => [
+      ...prev,
+      {
+        id: `sex-c-${Date.now()}`,
+        nameAr: sessionCustomExName.trim(),
+        nameEn: "",
+        category: "تمرين مخصص",
+        sets: 3,
+        reps: 12,
+        completionPercentage: 100,
+        notes: "",
+      },
+    ]);
+    setSessionCustomExName("");
+  };
+
+  const handleSaveSession = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!patient) return;
+    setIsSavingSession(true);
+    try {
+      const existingList = patient.sessions || [];
+      const existingTarget = editingSessionId
+        ? existingList.find((s) => s.id === editingSessionId)
+        : null;
+      const nextNum =
+        existingTarget?.sessionNumber ||
+        existingList.reduce((m, s) => Math.max(m, s.sessionNumber || 0), 0) + 1;
+
+      const avgCompletion =
+        sessionExercisesForm.length > 0
+          ? Math.round(
+              sessionExercisesForm.reduce((acc, ex) => acc + (Number(ex.completionPercentage) || 0), 0) /
+                sessionExercisesForm.length
+            )
+          : 100;
+
+      const sessionObj: PatientSessionItem = {
+        id: editingSessionId || `sess-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+        sessionNumber: nextNum,
+        date: sessionDate,
+        title: sessionTitle.trim() || `جلسة تأهيل #${nextNum}`,
+        phase: sessionPhase,
+        durationMinutes: parseInt(sessionDuration, 10) || 45,
+        painLevel: sessionPainLevel !== "" ? parseInt(sessionPainLevel, 10) : null,
+        overallCompletion: avgCompletion,
+        exercises: sessionExercisesForm,
+        notes: sessionNotes.trim() || null,
+        extraDetails: sessionExtraDetails.trim() || null,
+        createdAt: existingTarget?.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      let nextSessions = editingSessionId
+        ? existingList.map((s) => (s.id === editingSessionId ? sessionObj : s))
+        : [...existingList, sessionObj];
+      nextSessions.sort((a, b) => (a.sessionNumber || 0) - (b.sessionNumber || 0));
+
+      try {
+        const res = await fetch(`/api/cases/${patient.id}/sessions`, {
+          method: editingSessionId ? "PATCH" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ session: sessionObj, _baseSnapshot: patient }),
+        });
+        if (res.ok) {
+          const data = await res.json().catch(() => null);
+          if (Array.isArray(data?.sessions)) nextSessions = data.sessions;
+        }
+      } catch (err) {
+        console.warn("Session server sync fallback:", err);
+      }
+
+      const nextPatient = {
+        ...patient,
+        sessions: nextSessions,
+        updatedAt: new Date().toISOString(),
+      };
+      setPatient(nextPatient);
+      upsertLocalCase(nextPatient);
+      setIsSessionModalOpen(false);
+      showToast(
+        "success",
+        editingSessionId
+          ? `تم تحديث الجلسة #${sessionObj.sessionNumber} في سجل المريض.`
+          : `تم تسجيل الجلسة #${sessionObj.sessionNumber} وحفظها بنجاح!`
+      );
+    } finally {
+      setIsSavingSession(false);
+    }
+  };
+
+  const handleDeleteSession = async (sessionId: string) => {
+    if (!patient) return;
+    const nextSessions = (patient.sessions || []).filter((s) => s.id !== sessionId);
+    const nextPatient = { ...patient, sessions: nextSessions, updatedAt: new Date().toISOString() };
+    setPatient(nextPatient);
+    upsertLocalCase(nextPatient);
+    showToast("success", "تم حذف الجلسة من السجل.");
+
+    try {
+      await fetch(`/api/cases/${patient.id}/sessions?sessionId=${encodeURIComponent(sessionId)}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId, _baseSnapshot: nextPatient }),
+      });
+    } catch {}
+  };
+
+  const handleShareSessionWhatsApp = (sess: PatientSessionItem) => {
+    if (!patient) return;
+    const exLines = (sess.exercises || [])
+      .map(
+        (ex, i) =>
+          `${i + 1}. *${ex.nameAr}* — ${ex.sets} مجموعات × ${ex.reps} تكرار (إنجاز ${ex.completionPercentage}%)`
+      )
+      .join("\n");
+    const msg = [
+      `*ملخص جلسة تأهيل #${sess.sessionNumber} — عيادة Revive* 🩺`,
+      `👤 *المريض:* ${patient.name}`,
+      `📅 *التاريخ:* ${formatDate(sess.date)}`,
+      `⚡ *المرحلة:* ${getPhaseLabel(sess.phase || "ACUTE").ar}`,
+      sess.painLevel !== null && sess.painLevel !== undefined ? `📊 *مؤشر الألم:* ${sess.painLevel}/10` : null,
+      exLines ? `\n🏋️‍♂️ *تمارين الجلسة:*\n${exLines}` : null,
+      sess.notes ? `\n📝 *ملاحظات الطبيب:* ${sess.notes}` : null,
+      sess.extraDetails ? `📋 *تفاصيل إضافية:* ${sess.extraDetails}` : null,
+      `━━━━━━━━━━━━━━━━━━━━`,
+      `عيادة Revive للعلاج الطبيعي والتأهيل الحركي`,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    window.open(generateWhatsAppShareLink(msg), "_blank");
+  };
+
+  // Add New Girth Measurement Handler
+  const handleAddGirthSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!patient) return;
+    const validRows = girthRowsInput
+      .filter((r) => r.injuredCm.trim() !== "")
+      .map((r) => ({
+        distanceCm: Number(r.distanceCm) || 0,
+        injuredCm: parseFloat(r.injuredCm),
+        healthyCm: r.healthyCm.trim() ? parseFloat(r.healthyCm) : null,
+      }));
+    if (validRows.length === 0) {
+      showToast("error", "يرجى إدخال قياس واحد على الأقل للطرف المصاب بالسنتيمتر.");
+      return;
+    }
+    setIsSavingGirth(true);
+    try {
+      const existingGirth =
+        (patient.girthEvaluations && patient.girthEvaluations.length > 0
+          ? patient.girthEvaluations
+          : patient.girthMeasurements) || [];
+      const newEval: GirthEvaluationItem = {
+        id: `girth-${Date.now()}`,
+        patientId: patient.id,
+        date: girthDateInput || new Date().toISOString(),
+        landmark: girthLandmark,
+        createdAt: new Date().toISOString(),
+        measurements: validRows.map((m, idx) => ({
+          id: `gm-${Date.now()}-${idx}`,
+          evaluationId: "",
+          distanceCm: m.distanceCm,
+          injuredCm: m.injuredCm,
+          healthyCm: m.healthyCm,
+        })),
+      };
+      const nextGirthList = [newEval, ...existingGirth];
+      const updated = await patchCaseWithSync(patient, {
+        girthEvaluations: nextGirthList,
+        girthMeasurements: nextGirthList,
+      });
+      setPatient(updated);
+      setIsAddGirthOpen(false);
+      setGirthRowsInput([
+        { distanceCm: 0, injuredCm: "", healthyCm: "" },
+        { distanceCm: 15, injuredCm: "", healthyCm: "" },
+        { distanceCm: 30, injuredCm: "", healthyCm: "" },
+      ]);
+      showToast("success", "تم حفظ قياس محيط العضلات الجديد وإظهاره في الملخص والتفاصيل!");
+    } finally {
+      setIsSavingGirth(false);
+    }
   };
 
   // Phase Transition via Selector Action
@@ -702,52 +1241,22 @@ function PatientDetailPageContent() {
     if (!patient) return;
     setIsUpdatingPhase(true);
     try {
-      const res = await fetch(`/api/cases/${patient.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          phase: selectedNewPhase,
-          phaseNotes:
-            phaseTransitionNotes.trim() ||
-            `انتقال سريري معتمد إلى مرحلة: ${getPhaseLabel(selectedNewPhase).ar} (${getPhaseLabel(selectedNewPhase).en})`,
-        }),
+      const notes =
+        phaseTransitionNotes.trim() ||
+        `انتقال سريري معتمد إلى مرحلة: ${getPhaseLabel(selectedNewPhase).ar} (${getPhaseLabel(selectedNewPhase).en})`;
+      const updated = await patchCaseWithSync(patient, {
+        phase: selectedNewPhase,
+        phaseNotes: notes,
       });
-
-      if (!res.ok) throw new Error("فشل تحديث مرحلة المريض");
-
-      if (typeof window !== "undefined") {
-        try {
-          const raw = localStorage.getItem("revive_cases");
-          if (raw) {
-            const list = JSON.parse(raw);
-            const nextList = list.map((item: any) =>
-              item.id === patient.id
-                ? {
-                    ...item,
-                    rehabPrograms: [
-                      {
-                        phase: selectedNewPhase,
-                        isActive: true,
-                        notes: phaseTransitionNotes || "انتقال المرحلة",
-                      },
-                      ...(item.rehabPrograms || []).map((p: any) => ({ ...p, isActive: false })),
-                    ],
-                  }
-                : item
-            );
-            localStorage.setItem("revive_cases", JSON.stringify(nextList));
-          }
-        } catch {}
-      }
-
+      setPatient(updated);
       setAdvanceSuccess(true);
-      setTimeout(() => setAdvanceSuccess(false), 3000);
+      setTimeout(() => setAdvanceSuccess(false), 4000);
       setIsPhaseModalOpen(false);
       setPhaseTransitionNotes("");
-      await fetchPatientDetails();
+      showToast("success", `تم الانتقال إلى "${getPhaseLabel(selectedNewPhase).ar}" وحفظ المرحلة بنجاح!`);
     } catch (err: any) {
       console.error("Phase transition error:", err);
-      alert(err.message || "حدث خطأ أثناء ترقية المرحلة");
+      showToast("error", err.message || "حدث خطأ أثناء الانتقال للمرحلة");
     } finally {
       setIsUpdatingPhase(false);
     }
@@ -759,33 +1268,17 @@ function PatientDetailPageContent() {
     if (!patient) return;
     setIsSavingEdit(true);
     try {
-      const res = await fetch(`/api/cases/${patient.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(editFormData),
+      const updated = await patchCaseWithSync(patient, {
+        ...editFormData,
+        dateOfBirth: editFormData.dateOfBirth || null,
+        surgeryDate: editFormData.surgeryDate || null,
       });
-
-      if (!res.ok) throw new Error("فشل حفظ تعديلات ملف المريض");
-
-      if (typeof window !== "undefined") {
-        try {
-          const raw = localStorage.getItem("revive_cases");
-          if (raw) {
-            const list = JSON.parse(raw);
-            const nextList = list.map((item: any) =>
-              item.id === patient.id ? { ...item, ...editFormData } : item
-            );
-            localStorage.setItem("revive_cases", JSON.stringify(nextList));
-          }
-        } catch {}
-      }
-
-      await fetchPatientDetails();
+      setPatient(updated);
       setIsEditModalOpen(false);
-      alert("تم حفظ تعديلات ملف المريض بنجاح!");
+      showToast("success", "تم حفظ تعديلات ملف المريض بنجاح!");
     } catch (err: any) {
       console.error("Save edit profile error:", err);
-      alert(err.message || "حدث خطأ أثناء حفظ التعديلات");
+      showToast("error", err.message || "حدث خطأ أثناء حفظ التعديلات");
     } finally {
       setIsSavingEdit(false);
     }
@@ -809,10 +1302,17 @@ function PatientDetailPageContent() {
     });
   }, [patient?.romMeasurements, romSearch, romJointFilter]);
 
-  // Flattened Girth Measurements for Multi-Date Comparison (Harmonizes both formats)
+  // Flattened Girth Measurements for Multi-Date Comparison (fixes empty-array truthiness)
   const flattenedGirthRows = useMemo(() => {
-    const list = patient?.girthEvaluations || patient?.girthMeasurements;
-    if (!list || !Array.isArray(list)) return [];
+    const gEv = (patient as any)?.girthEvaluations;
+    const gMs = patient?.girthMeasurements;
+    const list =
+      Array.isArray(gEv) && gEv.length > 0
+        ? gEv
+        : Array.isArray(gMs) && gMs.length > 0
+        ? gMs
+        : [];
+    if (list.length === 0) return [];
     const rows: {
       evaluationId: string;
       date: string;
@@ -902,10 +1402,39 @@ function PatientDetailPageContent() {
 
   const currentProgram = patient.rehabPrograms?.[0];
   const phaseInfo = currentProgram ? getPhaseLabel(currentProgram.phase) : getPhaseLabel("ACUTE");
+  const latestGirthRow = flattenedGirthRows[0] || null;
 
   return (
     <div className="min-h-screen bg-slate-50 py-8 px-4 sm:px-6 lg:px-8">
       <div className="max-w-6xl mx-auto space-y-8">
+        {/* Global Inline Toast Banner */}
+        {toastBanner && (
+          <div
+            className={cn(
+              "p-3.5 rounded-xl border text-xs sm:text-sm font-bold flex items-center justify-between gap-2 shadow-sm",
+              toastBanner.type === "success"
+                ? "bg-emerald-50 border-emerald-300 text-emerald-900"
+                : "bg-red-50 border-red-300 text-red-900"
+            )}
+          >
+            <div className="flex items-center gap-2">
+              {toastBanner.type === "success" ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              ) : (
+                <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+              )}
+              <span>{toastBanner.text}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setToastBanner(null)}
+              className="text-xs opacity-60 hover:opacity-100 px-2"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
         {/* Navigation Breadcrumbs & Top Actions */}
         <div className="flex flex-wrap items-center justify-between gap-4">
           <Link
@@ -950,7 +1479,7 @@ function PatientDetailPageContent() {
                       </Badge>
                     ) : (
                       <Badge variant="outline" className="text-xs">
-                        {patient.status}
+                        {patient.status === "paused" ? "متوقف مؤقتاً" : patient.status}
                       </Badge>
                     )}
                   </div>
@@ -964,6 +1493,26 @@ function PatientDetailPageContent() {
 
               {/* Header Action Buttons */}
               <div className="flex flex-wrap items-center gap-2 self-start md:self-center">
+                <Button
+                  onClick={() => setIsEditModalOpen(true)}
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5 border-slate-300 text-slate-800 hover:bg-slate-100 font-semibold"
+                >
+                  <Pencil className="w-3.5 h-3.5 text-slate-600" />
+                  <span>تعديل البيانات</span>
+                </Button>
+
+                <Button
+                  onClick={() => setIsPhaseModalOpen(true)}
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5 border-emerald-300 text-emerald-800 bg-emerald-50/70 hover:bg-emerald-100 font-semibold"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>تغيير المرحلة</span>
+                </Button>
+
                 <Button
                   onClick={handleSendWhatsApp}
                   variant="whatsapp"
@@ -996,7 +1545,7 @@ function PatientDetailPageContent() {
               </div>
             </div>
 
-            {/* Middle Row: Diagnosis, Injured Side Badge & Current Phase Badge */}
+            {/* Middle Row: Diagnosis, Side, Current Phase & Girth Summary */}
             <div className="flex flex-wrap items-center gap-2.5 pt-2 border-t border-slate-100">
               <span className="text-xs text-slate-400 font-medium">نوع الإصابة:</span>
               <span className="text-sm font-bold text-slate-800 bg-slate-100 px-3 py-1 rounded-lg">
@@ -1015,15 +1564,38 @@ function PatientDetailPageContent() {
                   : "الطرفين (Bilateral)"}
               </Badge>
 
-              <Badge
-                variant="default"
-                className="bg-emerald-50 text-emerald-800 border-emerald-200 text-xs py-1 font-semibold"
+              <button
+                type="button"
+                onClick={() => setIsPhaseModalOpen(true)}
+                className="inline-flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs py-1 px-2.5 rounded-full font-semibold transition-colors"
+                title="اضغط لتغيير المرحلة التأهيلية"
               >
-                المرحلة: {phaseInfo.ar} ({phaseInfo.en})
-              </Badge>
+                <span>المرحلة: {phaseInfo.ar} ({phaseInfo.en})</span>
+                <Sparkles className="w-3 h-3 text-emerald-600" />
+              </button>
+
+              {latestGirthRow && (
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("girth")}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 border text-xs py-1 px-2.5 rounded-full font-semibold transition-colors",
+                    latestGirthRow.deficitCm !== null && latestGirthRow.deficitCm > 0
+                      ? "bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100"
+                      : "bg-teal-50 text-teal-800 border-teal-200 hover:bg-teal-100"
+                  )}
+                >
+                  <Ruler className="w-3 h-3" />
+                  <span>
+                    محيط العضلات: {latestGirthRow.injuredCm} سم
+                    {latestGirthRow.healthyCm !== null ? ` / السليم ${latestGirthRow.healthyCm} سم` : ""}
+                    {latestGirthRow.lsi ? ` (${latestGirthRow.lsi}% LSI)` : ""}
+                  </span>
+                </button>
+              )}
             </div>
 
-            {/* Bottom Row: Key Dates Grid */}
+            {/* Bottom Row: Key Dates & Sessions Grid */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-3 border-t border-slate-100 text-xs">
               <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
                 <span className="text-slate-400 block font-medium">تاريخ الإصابة</span>
@@ -1044,9 +1616,9 @@ function PatientDetailPageContent() {
                 </span>
               </div>
               <div className="bg-emerald-50/70 p-3 rounded-xl border border-emerald-100">
-                <span className="text-emerald-700 block font-medium">جلسات التأهيل المنجزة</span>
+                <span className="text-emerald-700 block font-medium">جلسات التأهيل المسجلة</span>
                 <span className="font-bold text-emerald-900 mt-1 block">
-                  {patient.appointments?.filter((a) => a.status === "completed").length || 0} جلسة مكتملة
+                  {patient.sessions?.length || 0} جلسة مسجلة
                 </span>
               </div>
             </div>
@@ -1071,7 +1643,7 @@ function PatientDetailPageContent() {
               className="gap-2 py-2.5 px-4 text-xs sm:text-sm font-semibold rounded-lg data-[state=active]:bg-white data-[state=active]:text-emerald-800 data-[state=active]:shadow-sm"
             >
               <RotateCw className="w-4 h-4" />
-              <span>المدى الحركي (ROM)</span>
+              <span>المدى الحركي ({patient.romMeasurements?.length || 0})</span>
             </TabsTrigger>
 
             <TabsTrigger
@@ -1080,6 +1652,22 @@ function PatientDetailPageContent() {
             >
               <Ruler className="w-4 h-4" />
               <span>محيط العضلات ({flattenedGirthRows.length})</span>
+            </TabsTrigger>
+
+            <TabsTrigger
+              value="schedule"
+              className="gap-2 py-2.5 px-4 text-xs sm:text-sm font-semibold rounded-lg data-[state=active]:bg-white data-[state=active]:text-emerald-800 data-[state=active]:shadow-sm"
+            >
+              <Dumbbell className="w-4 h-4" />
+              <span>التمارين ({dailyExercises.length})</span>
+            </TabsTrigger>
+
+            <TabsTrigger
+              value="sessions"
+              className="gap-2 py-2.5 px-4 text-xs sm:text-sm font-semibold rounded-lg data-[state=active]:bg-white data-[state=active]:text-emerald-800 data-[state=active]:shadow-sm"
+            >
+              <ClipboardList className="w-4 h-4 text-emerald-700" />
+              <span>سجل الجلسات ({patient.sessions?.length || 0})</span>
             </TabsTrigger>
 
             <TabsTrigger
@@ -1095,15 +1683,7 @@ function PatientDetailPageContent() {
               className="gap-2 py-2.5 px-4 text-xs sm:text-sm font-semibold rounded-lg data-[state=active]:bg-white data-[state=active]:text-emerald-800 data-[state=active]:shadow-sm"
             >
               <Video className="w-4 h-4 text-blue-600" />
-              <span>تحليل الذكاء الاصطناعي ({patient.videoAnalyses?.length || 0})</span>
-            </TabsTrigger>
-
-            <TabsTrigger
-              value="schedule"
-              className="gap-2 py-2.5 px-4 text-xs sm:text-sm font-semibold rounded-lg data-[state=active]:bg-white data-[state=active]:text-emerald-800 data-[state=active]:shadow-sm"
-            >
-              <Dumbbell className="w-4 h-4" />
-              <span>جدول التمارين (Schedule)</span>
+              <span>تحليل AI ({patient.videoAnalyses?.length || 0})</span>
             </TabsTrigger>
 
             <TabsTrigger
@@ -1122,11 +1702,21 @@ function PatientDetailPageContent() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {/* Clinical Details Card */}
               <Card className="border-slate-200/90 shadow-sm">
-                <CardHeader className="pb-3">
+                <CardHeader className="pb-3 flex flex-row items-center justify-between">
                   <CardTitle className="text-base font-bold text-navy-950 flex items-center gap-2">
                     <FileText className="w-4 h-4 text-emerald-600" />
                     <span>الملف الإكلينيكي وآلية الإصابة</span>
                   </CardTitle>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setIsEditModalOpen(true)}
+                    className="h-7 text-xs text-slate-600 hover:text-emerald-700 gap-1"
+                  >
+                    <Pencil className="w-3 h-3" />
+                    <span>تعديل</span>
+                  </Button>
                 </CardHeader>
                 <CardContent className="space-y-4 text-sm">
                   <div>
@@ -1147,11 +1737,21 @@ function PatientDetailPageContent() {
 
               {/* Current Rehab Program Summary */}
               <Card className="border-slate-200/90 shadow-sm">
-                <CardHeader className="pb-3">
+                <CardHeader className="pb-3 flex flex-row items-center justify-between">
                   <CardTitle className="text-base font-bold text-navy-950 flex items-center gap-2">
                     <TrendingUp className="w-4 h-4 text-emerald-600" />
                     <span>البرنامج التأهيلي النشط</span>
                   </CardTitle>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setIsPhaseModalOpen(true)}
+                    className="h-7 text-xs border-emerald-200 text-emerald-700 hover:bg-emerald-50 gap-1"
+                  >
+                    <Sparkles className="w-3 h-3" />
+                    <span>تغيير المرحلة</span>
+                  </Button>
                 </CardHeader>
                 <CardContent className="space-y-4 text-sm">
                   <div className="bg-emerald-50/60 p-4 rounded-xl border border-emerald-100 space-y-2">
@@ -1162,31 +1762,137 @@ function PatientDetailPageContent() {
                       </Badge>
                     </div>
                     <p className="text-xs text-emerald-700">
-                      تاريخ بدء المرحلة: {currentProgram ? formatDate(currentProgram.startDate) : formatDate(patient.rehabStartDate)}
+                      تاريخ بدء المرحلة: {currentProgram?.startDate ? formatDate(currentProgram.startDate) : formatDate(patient.rehabStartDate)}
                     </p>
+                    {currentProgram?.notes && (
+                      <p className="text-[11px] text-slate-600 bg-white/70 p-2 rounded-lg border border-emerald-100/80">
+                        {currentProgram.notes}
+                      </p>
+                    )}
                   </div>
 
-                  <div className="space-y-2">
-                    <span className="text-xs text-slate-400 block font-medium">تمارين المرحلة:</span>
-                    <p className="text-xs text-slate-600">
-                      يحتوي البرنامج على {currentProgram?.programExercises?.length || dailyExercises.length} تمرين مخصص لاستعادة المدى والقوة والتحكم العصبي العضلي.
-                    </p>
+                  <div className="grid grid-cols-2 gap-2.5 text-xs">
+                    <div className="p-3 bg-slate-50 rounded-lg border border-slate-100">
+                      <span className="text-slate-400 block">التمارين الموصوفة:</span>
+                      <span className="font-bold text-navy-950 mt-0.5 block">
+                        {dailyExercises.length} تمارين مخصصة
+                      </span>
+                    </div>
+                    <div className="p-3 bg-slate-50 rounded-lg border border-slate-100">
+                      <span className="text-slate-400 block">إجمالي الجلسات المسجلة:</span>
+                      <span className="font-bold text-navy-950 mt-0.5 block">
+                        {patient.sessions?.length || 0} جلسة
+                      </span>
+                    </div>
                   </div>
                 </CardContent>
               </Card>
             </div>
 
-            {/* PHASE TRANSITION CHECKLIST SECTION */}
+            {/* MUSCLE GIRTH SUMMARY CARD IN OVERVIEW */}
+            <Card className="border-slate-200/90 shadow-sm bg-white overflow-hidden">
+              <CardHeader className="pb-3 bg-slate-50/70 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <CardTitle className="text-base font-bold text-navy-950 flex items-center gap-2">
+                    <Ruler className="w-4 h-4 text-emerald-600" />
+                    <span>ملخص قياسات محيط العضلات والضمور (Muscle Circumference Summary)</span>
+                  </CardTitle>
+                  <CardDescription className="text-xs text-slate-500">
+                    متابعة فرق المحيط ومؤشر التماثل العضلي (LSI%) بين الطرف المصاب والسليم
+                  </CardDescription>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setIsAddGirthOpen(true)}
+                    className="h-8 text-xs border-emerald-300 text-emerald-700 hover:bg-emerald-50 gap-1"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>إضافة قياس</span>
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setActiveTab("girth")}
+                    className="h-8 text-xs text-slate-600 hover:text-emerald-700"
+                  >
+                    <span>عرض السجل الكامل ←</span>
+                  </Button>
+                </div>
+              </CardHeader>
+
+              <CardContent className="p-4 sm:p-5">
+                {flattenedGirthRows.length === 0 ? (
+                  <div className="py-4 text-center text-xs text-slate-500 flex flex-col sm:flex-row items-center justify-center gap-3">
+                    <span>لا توجد قياسات محيط عضلات مسجلة لهذه الحالة حتى الآن.</span>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setIsAddGirthOpen(true)}
+                      className="h-7 text-xs border-emerald-300 text-emerald-700"
+                    >
+                      تسجيل أول قياس محيط
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    {flattenedGirthRows.slice(0, 4).map((row, idx) => (
+                      <div
+                        key={`ov-girth-${row.evaluationId}-${idx}`}
+                        className="p-3.5 rounded-xl border border-slate-200 bg-slate-50/60 space-y-1.5 text-xs"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-bold text-slate-800 line-clamp-1">{row.landmark}</span>
+                          <Badge variant="outline" className="text-[10px] shrink-0">
+                            {row.distanceCm} سم
+                          </Badge>
+                        </div>
+                        <div className="flex items-center justify-between pt-1">
+                          <span className="text-slate-500">المصاب: <strong className="text-emerald-700">{row.injuredCm} سم</strong></span>
+                          <span className="text-slate-500">السليم: <strong className="text-slate-800">{row.healthyCm != null ? `${row.healthyCm} سم` : "—"}</strong></span>
+                        </div>
+                        <div className="flex items-center justify-between pt-1 border-t border-slate-200/70">
+                          {row.deficitCm !== null ? (
+                            <span className={cn("font-bold", row.deficitCm > 0 ? "text-amber-700" : "text-emerald-700")}>
+                              {row.deficitCm > 0 ? `ضمور: -${row.deficitCm} سم` : "متماثل"}
+                            </span>
+                          ) : (
+                            <span className="text-slate-400">مفرد</span>
+                          )}
+                          {row.lsi !== null && (
+                            <Badge variant={row.lsi >= 90 ? "success" : "warning"} className="text-[10px] py-0">
+                              LSI {row.lsi}%
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* DYNAMIC PHASE TRANSITION CHECKLIST SECTION */}
             <Card className="border-slate-200/90 shadow-sm bg-white overflow-hidden">
               <CardHeader className="bg-slate-50/80 border-b border-slate-100 pb-4">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="space-y-1">
-                    <CardTitle className="text-base sm:text-lg font-bold text-navy-950 flex items-center gap-2">
+                    <CardTitle className="text-base sm:text-lg font-bold text-navy-950 flex flex-wrap items-center gap-2">
                       <CheckSquare className="w-5 h-5 text-emerald-600" />
-                      <span>معايير الانتقال للمرحلة التالية (Phase Transition Criteria)</span>
+                      <span>معايير الانتقال للمرحلة التالية (Dynamic Transition Criteria)</span>
                     </CardTitle>
-                    <CardDescription className="text-xs text-slate-500">
-                      قائمة الفحوصات الإكلينيكية والوظيفية اللازمة لترقية الحالة بأمان
+                    <CardDescription className="text-xs text-slate-500 flex flex-wrap items-center gap-2">
+                      <span>تتكيف تلقائياً حسب المرحلة الحالية ونوع الإصابة:</span>
+                      <Badge variant="outline" className="text-[11px] bg-white text-emerald-800 border-emerald-200">
+                        {injuryCategoryMeta.labelAr}
+                      </Badge>
+                      <Badge variant="secondary" className="text-[11px] bg-emerald-100 text-emerald-800">
+                        {phaseInfo.ar}
+                      </Badge>
                     </CardDescription>
                   </div>
 
@@ -1199,7 +1905,7 @@ function PatientDetailPageContent() {
                         : "bg-amber-50 text-amber-800 border-amber-200"
                     )}
                   >
-                    استيفاء: {criteriaMetCount} من {criteria.length} ({criteriaProgressPct}%)
+                    استيفاء: {criteriaMetCount} من {dynamicCriteria.length} ({criteriaProgressPct}%)
                   </Badge>
                 </div>
 
@@ -1210,7 +1916,7 @@ function PatientDetailPageContent() {
               </CardHeader>
 
               <CardContent className="p-6 space-y-3">
-                {criteria.map((item) => (
+                {dynamicCriteria.map((item) => (
                   <label
                     key={item.id}
                     className={cn(
@@ -1225,8 +1931,15 @@ function PatientDetailPageContent() {
                       onCheckedChange={() => handleToggleCriterion(item.id)}
                       className="mt-0.5"
                     />
-                    <div className="space-y-0.5 text-xs sm:text-sm">
-                      <span className="font-semibold block">{item.textAr}</span>
+                    <div className="flex-1 space-y-0.5 text-xs sm:text-sm">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-semibold">{item.textAr}</span>
+                        {item.targetMetric && (
+                          <Badge variant="outline" className="text-[10px] font-mono bg-slate-50 text-slate-700">
+                            {item.targetMetric}
+                          </Badge>
+                        )}
+                      </div>
                       <span className="text-xs text-slate-400 block font-normal">{item.textEn}</span>
                     </div>
                   </label>
@@ -1236,8 +1949,8 @@ function PatientDetailPageContent() {
               <CardFooter className="bg-slate-50/80 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-3 p-4">
                 <span className="text-xs text-slate-500">
                   {criteriaProgressPct === 100
-                    ? "✨ جميع الشروط مستوفاة! يمكنك ترقية الحالة للمرحلة التالية."
-                    : "⚠️ يجب استيفاء كافة الشروط الوظيفية لتقليل احتمالية الانتكاسة."}
+                    ? "✨ جميع الشروط مستوفاة! يمكنك ترقية أو نقل الحالة لأي مرحلة."
+                    : "⚠️ يمكنك تحديد الشروط المستوفاة أو اختيار أي مرحلة تأهيلية للانتقال المباشر."}
                 </span>
 
                 <Button
@@ -1245,7 +1958,7 @@ function PatientDetailPageContent() {
                   className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white gap-2 font-semibold shadow-xs"
                 >
                   <Sparkles className="w-4 h-4" />
-                  <span>ترقية أو اختيار المرحلة التأهيلية (Select Phase)</span>
+                  <span>الانتقال أو اختيار المرحلة التأهيلية (Select Phase)</span>
                 </Button>
               </CardFooter>
             </Card>
@@ -1385,14 +2098,25 @@ function PatientDetailPageContent() {
           {/* ═══════════════════════════════════════════ */}
           <TabsContent value="girth" className="space-y-6">
             <Card className="border-slate-200/90 shadow-sm">
-              <CardHeader className="pb-4">
-                <CardTitle className="text-base sm:text-lg font-bold text-navy-950 flex items-center gap-2">
-                  <Ruler className="w-5 h-5 text-emerald-600" />
-                  <span>سجل قياسات محيط العضلات والضمور (Girth Evaluation)</span>
-                </CardTitle>
-                <CardDescription className="text-xs text-slate-500">
-                  مقارنة محيط الطرف المصاب بالطرف السليم عند معالم تشريحية مختلفة (Limb Symmetry Index LSI)
-                </CardDescription>
+              <CardHeader className="pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <CardTitle className="text-base sm:text-lg font-bold text-navy-950 flex items-center gap-2">
+                    <Ruler className="w-5 h-5 text-emerald-600" />
+                    <span>سجل قياسات محيط العضلات والضمور (Girth Evaluation)</span>
+                  </CardTitle>
+                  <CardDescription className="text-xs text-slate-500">
+                    مقارنة محيط الطرف المصاب بالطرف السليم عند معالم تشريحية مختلفة (Limb Symmetry Index LSI)
+                  </CardDescription>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => setIsAddGirthOpen(true)}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold gap-1.5 self-start sm:self-auto"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>إضافة قياس محيط جديد</span>
+                </Button>
               </CardHeader>
 
               <CardContent className="p-0">
@@ -1488,7 +2212,7 @@ function PatientDetailPageContent() {
                     </CardDescription>
                   </div>
                   <Button asChild size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold gap-1.5 self-start sm:self-auto">
-                    <Link href="/return-to-play">
+                    <Link href={`/return-to-play?patientId=${patient.id}`}>
                       <Plus className="w-4 h-4" />
                       <span>إجراء فحص جاهزية جديد</span>
                     </Link>
@@ -1504,7 +2228,7 @@ function PatientDetailPageContent() {
                       لم يتم تسجيل أي فحص معايير عودة للملعب لهذا المريض حتى الآن.
                     </p>
                     <Button asChild variant="outline" size="sm" className="mt-2 text-xs border-emerald-300 text-emerald-700">
-                      <Link href="/return-to-play">
+                      <Link href={`/return-to-play?patientId=${patient.id}`}>
                         الانتقال إلى صفحة شروط النزول للملعب
                       </Link>
                     </Button>
@@ -1586,11 +2310,11 @@ function PatientDetailPageContent() {
                       <span>سجل تحليلات الذكاء الاصطناعي والزوايا الحركية (AI Motion Analysis)</span>
                     </CardTitle>
                     <CardDescription className="text-xs text-slate-500">
-                      قياسات الزوايا المفصلية (الكتف، الكوع، الرسغ، العمود الفقري، الركبة، الكاحل) وتفعيل العضلات المسجلة بالفيديو
+                      قياسات الزوايا المفصلية الكاملة (الكتف، لوح الكتف، الكوع، الرسغ، العمود الفقري، الورك، الركبة، الكاحل) والعضلات النشطة
                     </CardDescription>
                   </div>
                   <Button asChild size="sm" className="bg-blue-600 hover:bg-blue-700 text-white font-bold gap-1.5 self-start sm:self-auto">
-                    <Link href="/ai-analysis">
+                    <Link href={`/ai-analysis?patientId=${patient.id}`}>
                       <Video className="w-4 h-4" />
                       <span>بدء تحليل فيديو جديد</span>
                     </Link>
@@ -1598,7 +2322,7 @@ function PatientDetailPageContent() {
                 </div>
               </CardHeader>
 
-              <CardContent className="p-6">
+              <CardContent className="p-6 space-y-6">
                 {(!patient.videoAnalyses || patient.videoAnalyses.length === 0) ? (
                   <div className="p-12 text-center space-y-3">
                     <Video className="w-10 h-10 text-slate-300 mx-auto" />
@@ -1606,102 +2330,170 @@ function PatientDetailPageContent() {
                       لا توجد جلسات تحليل حركي بالذكاء الاصطناعي مسجلة لهذا المريض حتى الآن.
                     </p>
                     <Button asChild variant="outline" size="sm" className="mt-2 text-xs border-blue-300 text-blue-700">
-                      <Link href="/ai-analysis">
+                      <Link href={`/ai-analysis?patientId=${patient.id}`}>
                         الانتقال إلى صفحة تحليل الذكاء الاصطناعي (AI Analysis)
                       </Link>
                     </Button>
                   </div>
                 ) : (
                   <div className="space-y-6">
-                    {patient.videoAnalyses.map((vaItem: any, idx: number) => (
-                      <div key={vaItem.id || idx} className="rounded-xl border border-slate-200 overflow-hidden bg-white shadow-xs">
-                        <div className="p-4 bg-slate-50/80 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
-                          <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-xl bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-sm">
-                              AI
-                            </div>
-                            <div>
-                              <h4 className="font-bold text-sm text-slate-900">
-                                {vaItem.exerciseName || "تحليل حركي مفصل"}
-                              </h4>
-                              <span className="text-xs text-slate-500">
-                                التاريخ: {formatDate(vaItem.evaluatedAt || vaItem.createdAt || new Date().toISOString())} • زاوية التصوير: {vaItem.cameraPlane === "frontal" ? "مستوى أمامي (Frontal)" : "مستوى جانبي (Sagittal)"}
-                              </span>
-                            </div>
+                    {/* Multi-Session AI Comparison Table when >= 2 sessions */}
+                    {patient.videoAnalyses.length >= 2 && (() => {
+                      const newest = patient.videoAnalyses[0];
+                      const oldest = patient.videoAnalyses[patient.videoAnalyses.length - 1];
+                      const comparisonRows = computeSessionComparison(oldest, newest).slice(0, 12);
+                      return (
+                        <div className="rounded-xl border border-indigo-200 bg-indigo-50/40 p-4 space-y-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <h4 className="text-sm font-bold text-indigo-950 flex items-center gap-2">
+                              <TrendingUp className="w-4 h-4 text-indigo-600" />
+                              <span>مقارنة التطور الحركي للمريض (أول جلسة تصوير vs أحدث جلسة)</span>
+                            </h4>
+                            <span className="text-[11px] text-indigo-700 font-medium">
+                              {formatDateShort(oldest.evaluatedAt || oldest.createdAt)} ← {formatDateShort(newest.evaluatedAt || newest.createdAt)}
+                            </span>
+                          </div>
+                          <div className="overflow-x-auto bg-white rounded-lg border border-indigo-100">
+                            <Table>
+                              <TableHeader className="bg-slate-50">
+                                <TableRow>
+                                  <TableHead className="text-start text-xs">المفصل</TableHead>
+                                  <TableHead className="text-start text-xs">الحركة</TableHead>
+                                  <TableHead className="text-start text-xs">أول قياس</TableHead>
+                                  <TableHead className="text-start text-xs">أحدث قياس</TableHead>
+                                  <TableHead className="text-start text-xs">التغير (Delta)</TableHead>
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {comparisonRows.map((row) => {
+                                  const improved = row.lowerIsBetter ? row.delta < 0 : row.delta > 0;
+                                  return (
+                                    <TableRow key={row.id} className="text-xs">
+                                      <TableCell className="font-bold text-slate-800">{row.jointAr}</TableCell>
+                                      <TableCell className="text-slate-600">{row.movementAr}</TableCell>
+                                      <TableCell className="font-mono">{row.baselineVal}°</TableCell>
+                                      <TableCell className="font-mono font-bold text-emerald-700">{row.latestVal}°</TableCell>
+                                      <TableCell>
+                                        <Badge
+                                          variant={improved ? "success" : "secondary"}
+                                          className="text-[10px] font-mono"
+                                        >
+                                          {row.delta > 0 ? `+${row.delta}°` : `${row.delta}°`}
+                                        </Badge>
+                                      </TableCell>
+                                    </TableRow>
+                                  );
+                                })}
+                              </TableBody>
+                            </Table>
                           </div>
                         </div>
+                      );
+                    })()}
 
-                        {/* Joint Angles Grid */}
-                        <div className="p-4 border-b border-slate-100">
-                          <span className="text-xs font-bold text-slate-700 block mb-2">الزوايا المفصلية المسجلة:</span>
-                          <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-2 text-center text-xs">
-                            {vaItem.jointAngles?.shoulder && (
-                              <div className="p-2 rounded-lg bg-slate-50 border border-slate-100">
-                                <span className="text-[11px] text-slate-400 block">الكتف (Shoulder)</span>
-                                <span className="font-bold text-slate-800 mt-1 block">
-                                  {vaItem.jointAngles.shoulder.right || vaItem.jointAngles.shoulder.left || 0}°
+                    {patient.videoAnalyses.map((vaItem: any, idx: number) => {
+                      const a = normalizeJointAngles(vaItem.jointAngles);
+                      return (
+                        <div key={vaItem.id || idx} className="rounded-xl border border-slate-200 overflow-hidden bg-white shadow-xs">
+                          <div className="p-4 bg-slate-50/80 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-xl bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-sm">
+                                AI
+                              </div>
+                              <div>
+                                <h4 className="font-bold text-sm text-slate-900">
+                                  {vaItem.exerciseName || "تحليل حركي مفصل"}
+                                </h4>
+                                <span className="text-xs text-slate-500">
+                                  التاريخ: {formatDate(vaItem.evaluatedAt || vaItem.createdAt || new Date().toISOString())} • زاوية التصوير: {vaItem.cameraPlane === "frontal" ? "مستوى أمامي (Frontal)" : "مستوى جانبي (Sagittal)"}
                                 </span>
                               </div>
-                            )}
-                            {vaItem.jointAngles?.elbow && (
-                              <div className="p-2 rounded-lg bg-slate-50 border border-slate-100">
-                                <span className="text-[11px] text-slate-400 block">الكوع (Elbow)</span>
-                                <span className="font-bold text-slate-800 mt-1 block">
-                                  {vaItem.jointAngles.elbow.right || vaItem.jointAngles.elbow.left || 0}°
-                                </span>
-                              </div>
-                            )}
-                            {vaItem.jointAngles?.wrist && (
-                              <div className="p-2 rounded-lg bg-slate-50 border border-slate-100">
-                                <span className="text-[11px] text-slate-400 block">الرسغ (Wrist)</span>
-                                <span className="font-bold text-slate-800 mt-1 block">
-                                  {vaItem.jointAngles.wrist.right || vaItem.jointAngles.wrist.left || 0}°
-                                </span>
-                              </div>
-                            )}
-                            {vaItem.jointAngles?.spine && (
-                              <div className="p-2 rounded-lg bg-slate-50 border border-slate-100">
-                                <span className="text-[11px] text-slate-400 block">الجذع (Spine)</span>
-                                <span className="font-bold text-slate-800 mt-1 block">
-                                  {vaItem.jointAngles.spine.flexion || 0}°
-                                </span>
-                              </div>
-                            )}
-                            {vaItem.jointAngles?.knee && (
-                              <div className="p-2 rounded-lg bg-slate-50 border border-slate-100">
-                                <span className="text-[11px] text-slate-400 block">الركبة (Knee)</span>
-                                <span className="font-bold text-slate-800 mt-1 block">
-                                  {vaItem.jointAngles.knee.right || vaItem.jointAngles.knee.left || 0}°
-                                </span>
-                              </div>
-                            )}
-                            {vaItem.jointAngles?.ankle && (
-                              <div className="p-2 rounded-lg bg-slate-50 border border-slate-100">
-                                <span className="text-[11px] text-slate-400 block">الكاحل (Ankle)</span>
-                                <span className="font-bold text-slate-800 mt-1 block">
-                                  {vaItem.jointAngles.ankle.right || vaItem.jointAngles.ankle.left || 0}°
-                                </span>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Active Muscles Engagement */}
-                        {vaItem.activeMuscles && vaItem.activeMuscles.length > 0 && (
-                          <div className="p-4 bg-slate-50/50">
-                            <span className="text-xs font-bold text-slate-700 block mb-2">العضلات المستهدفة ونسبة التفعيل:</span>
-                            <div className="flex flex-wrap gap-2">
-                              {vaItem.activeMuscles.map((m: any, mIdx: number) => (
-                                <Badge key={mIdx} variant="secondary" className="text-xs py-1 px-2.5 bg-white border-slate-200">
-                                  <span className="font-bold text-emerald-800">{m.nameAr}</span>
-                                  <span className="text-slate-400 ms-1">({m.percentage}%)</span>
-                                </Badge>
-                              ))}
                             </div>
                           </div>
-                        )}
-                      </div>
-                    ))}
+
+                          {/* Full Joint Angles Grid */}
+                          <div className="p-4 border-b border-slate-100 space-y-3">
+                            <span className="text-xs font-bold text-slate-700 block">الزوايا المفصلية والحركات المسجلة:</span>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs">
+                              <div className="p-3 rounded-lg bg-slate-50 border border-slate-200/70 space-y-1">
+                                <span className="font-bold text-slate-800 block">الكتف (Shoulder)</span>
+                                <div className="text-[11px] text-slate-600 grid grid-cols-2 gap-1">
+                                  <span>رفع أمامي: <strong>{a.shoulder.flexion}°</strong></span>
+                                  <span>تبعيد: <strong>{a.shoulder.abduction}°</strong></span>
+                                  <span>دوران خارجي: <strong>{a.shoulder.externalRotation}°</strong></span>
+                                  <span>دوران داخلي: <strong>{a.shoulder.internalRotation}°</strong></span>
+                                </div>
+                              </div>
+
+                              <div className="p-3 rounded-lg bg-slate-50 border border-slate-200/70 space-y-1">
+                                <span className="font-bold text-slate-800 block">لوح الكتف (Scapula)</span>
+                                <div className="text-[11px] text-slate-600 grid grid-cols-2 gap-1">
+                                  <span>دوران أعلى: <strong>{a.scapula.upwardRotation}°</strong></span>
+                                  <span>ضم: <strong>{a.scapula.retraction}°</strong></span>
+                                  <span>تبعيد: <strong>{a.scapula.protraction}°</strong></span>
+                                  <span>إمالة خلفية: <strong>{a.scapula.posteriorTilt}°</strong></span>
+                                </div>
+                              </div>
+
+                              <div className="p-3 rounded-lg bg-slate-50 border border-slate-200/70 space-y-1">
+                                <span className="font-bold text-slate-800 block">الكوع والرسغ</span>
+                                <div className="text-[11px] text-slate-600 grid grid-cols-2 gap-1">
+                                  <span>ثني الكوع: <strong>{a.elbow.flexion}°</strong></span>
+                                  <span>كب/بسط: <strong>{a.elbow.pronation}°/{a.elbow.supination}°</strong></span>
+                                  <span>ثني الرسغ: <strong>{a.wrist.flexion}°</strong></span>
+                                  <span>بسط الرسغ: <strong>{a.wrist.extension}°</strong></span>
+                                </div>
+                              </div>
+
+                              <div className="p-3 rounded-lg bg-slate-50 border border-slate-200/70 space-y-1">
+                                <span className="font-bold text-slate-800 block">العمود الفقري</span>
+                                <div className="text-[11px] text-slate-600 grid grid-cols-2 gap-1">
+                                  <span>انحناء أمامي: <strong>{a.spine.flexion}°</strong></span>
+                                  <span>تقوس خلفي: <strong>{a.spine.extension}°</strong></span>
+                                  <span>ميل جانبي: <strong>{a.spine.lateralFlexionRight}°/{a.spine.lateralFlexionLeft}°</strong></span>
+                                  <span>دوران: <strong>{a.spine.rotationRight}°</strong></span>
+                                </div>
+                              </div>
+
+                              <div className="p-3 rounded-lg bg-slate-50 border border-slate-200/70 space-y-1">
+                                <span className="font-bold text-slate-800 block">الركبة والورك</span>
+                                <div className="text-[11px] text-slate-600 grid grid-cols-2 gap-1">
+                                  <span>ثني الركبة: <strong>{a.knee.flexion}°</strong></span>
+                                  <span>انحراف Valgus: <strong>{a.knee.valgus}°</strong></span>
+                                  <span>ثني الورك: <strong>{a.hip.flexion}°</strong></span>
+                                  <span>تبعيد الورك: <strong>{a.hip.abduction}°</strong></span>
+                                </div>
+                              </div>
+
+                              <div className="p-3 rounded-lg bg-slate-50 border border-slate-200/70 space-y-1">
+                                <span className="font-bold text-slate-800 block">الكاحل (Ankle)</span>
+                                <div className="text-[11px] text-slate-600 grid grid-cols-2 gap-1">
+                                  <span>عطف ظهري: <strong>{a.ankle.dorsiflexion}°</strong></span>
+                                  <span>عطف أخمصي: <strong>{a.ankle.plantarflexion}°</strong></span>
+                                  <span>انقلاب داخلي: <strong>{a.ankle.inversion}°</strong></span>
+                                  <span>انقلاب خارجي: <strong>{a.ankle.eversion}°</strong></span>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Active Muscles Engagement */}
+                          {vaItem.activeMuscles && vaItem.activeMuscles.length > 0 && (
+                            <div className="p-4 bg-slate-50/50">
+                              <span className="text-xs font-bold text-slate-700 block mb-2">العضلات العاملة والمستهدفة في التمرين:</span>
+                              <div className="flex flex-wrap gap-2">
+                                {vaItem.activeMuscles.map((m: any, mIdx: number) => (
+                                  <Badge key={mIdx} variant="secondary" className="text-xs py-1 px-2.5 bg-white border-slate-200">
+                                    <span className="font-bold text-emerald-800">{m.nameAr}</span>
+                                    <span className="text-slate-400 ms-1">({m.percentage}%)</span>
+                                  </Badge>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </CardContent>
@@ -1709,17 +2501,17 @@ function PatientDetailPageContent() {
           </TabsContent>
 
           {/* ═══════════════════════════════════════════ */}
-          {/* TAB 4: EXERCISE SCHEDULE (DAILY TRACKING) */}
+          {/* TAB 4: EXERCISE SCHEDULE (EXERCISES MANAGEMENT) */}
           {/* ═══════════════════════════════════════════ */}
           <TabsContent value="schedule" className="space-y-6">
-            {/* Toolbar: Rest Day Switch & Copy Routine */}
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 bg-white p-4 rounded-xl border border-slate-200/90 shadow-sm">
-              <div className="flex items-center gap-4">
+            {/* Toolbar: Rest Day Switch, Add Multi-Exercises, WhatsApp & Copy */}
+            <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-4 bg-white p-4 rounded-xl border border-slate-200/90 shadow-sm">
+              <div className="flex flex-wrap items-center gap-4">
                 <div className="flex items-center gap-2">
                   <Switch
                     id="rest-day-toggle"
                     checked={isRestDay}
-                    onCheckedChange={setIsRestDay}
+                    onCheckedChange={handleToggleRestDay}
                   />
                   <label
                     htmlFor="rest-day-toggle"
@@ -1736,8 +2528,28 @@ function PatientDetailPageContent() {
                 )}
               </div>
 
-              {/* Copy Schedule Button */}
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  onClick={handleOpenAddExercisesModal}
+                  size="sm"
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold gap-1.5"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>إضافة تمرين / تمارين للمريض</span>
+                </Button>
+
+                <Button
+                  type="button"
+                  onClick={handleShareExercisesWhatsApp}
+                  variant="whatsapp"
+                  size="sm"
+                  className="gap-1.5 font-semibold"
+                >
+                  <MessageCircle className="w-4 h-4" />
+                  <span>إرسال واتساب</span>
+                </Button>
+
                 <Button
                   onClick={handleCopySchedule}
                   variant="outline"
@@ -1747,12 +2559,12 @@ function PatientDetailPageContent() {
                   {copiedSchedule ? (
                     <>
                       <Check className="w-4 h-4 text-emerald-600" />
-                      <span className="text-emerald-700 font-bold">تم النسخ بنجاح!</span>
+                      <span className="text-emerald-700 font-bold">تم النسخ!</span>
                     </>
                   ) : (
                     <>
                       <Copy className="w-4 h-4 text-emerald-600" />
-                      <span>نسخ جدول التمارين</span>
+                      <span>نسخ الجدول</span>
                     </>
                   )}
                 </Button>
@@ -1775,18 +2587,36 @@ function PatientDetailPageContent() {
                 </CardContent>
               </Card>
             ) : dailyExercises.length === 0 ? (
-              <div className="p-12 text-center text-slate-400 bg-white rounded-xl border border-slate-200">
-                <Dumbbell className="w-10 h-10 mx-auto mb-2 opacity-50" />
-                <p>لم يتم تعيين تمارين للمرحلة الحالية بعد.</p>
+              <div className="p-12 text-center text-slate-500 bg-white rounded-xl border border-dashed border-slate-300 space-y-3">
+                <Dumbbell className="w-10 h-10 mx-auto text-slate-300" />
+                <div className="space-y-1">
+                  <p className="font-bold text-slate-700 text-base">
+                    جدول التمارين فارغ حالياً
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    يبدأ ملف كل مريض بدون تمارين مثبتة مسبقاً حتى يضيف الطبيب التمارين المناسبة للحالة.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  onClick={handleOpenAddExercisesModal}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold gap-1.5"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>إضافة تمرين أو عدة تمارين الآن</span>
+                </Button>
               </div>
             ) : (
-              /* Exercise Cards Grid with Interactive +1 / -1 Buttons */
+              /* Exercise Cards Grid with Target Dosage, Completion %, Interactive Counters & Delete */
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
                 {dailyExercises.map((item, index) => {
                   const targetSets = item.targetSets || 3;
                   const completedSets = item.completedSets || 0;
-                  const isSetsCompleted = completedSets >= targetSets;
-                  const pct = Math.min(100, Math.round((completedSets / targetSets) * 100));
+                  const pct =
+                    item.completionPercentage !== undefined
+                      ? item.completionPercentage
+                      : Math.min(100, Math.round((completedSets / targetSets) * 100));
+                  const isSetsCompleted = pct >= 100 || completedSets >= targetSets;
 
                   return (
                     <Card
@@ -1800,7 +2630,7 @@ function PatientDetailPageContent() {
                     >
                       <CardHeader className="pb-3 border-b border-slate-50">
                         <div className="flex items-start justify-between gap-2">
-                          <div className="flex items-center gap-2.5">
+                          <div className="flex items-center gap-2.5 min-w-0">
                             <div
                               className={cn(
                                 "w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs shrink-0",
@@ -1811,29 +2641,59 @@ function PatientDetailPageContent() {
                             >
                               {isSetsCompleted ? "✓" : index + 1}
                             </div>
-                            <div>
+                            <div className="min-w-0">
                               <CardTitle className="text-sm font-bold text-navy-950 line-clamp-1">
                                 {item.exercise?.nameAr}
                               </CardTitle>
-                              <CardDescription className="text-xs text-slate-500 font-medium mt-0.5">
+                              <CardDescription className="text-xs text-slate-500 font-medium mt-0.5 line-clamp-1">
                                 {item.exercise?.nameEn}
                               </CardDescription>
                             </div>
                           </div>
 
-                          <Badge variant="secondary" className="text-[10px]">
-                            {item.exercise?.category || "تأهيل"}
-                          </Badge>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <Badge variant="secondary" className="text-[10px]">
+                              {item.exercise?.category || "تأهيل"}
+                            </Badge>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleDeleteAssignedExercise(item.id)}
+                              className="h-7 w-7 text-rose-500 hover:text-rose-700 hover:bg-rose-50"
+                              title="حذف التمرين من ملف المريض"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </Button>
+                          </div>
                         </div>
                       </CardHeader>
 
                       <CardContent className="pt-4 pb-4 space-y-4">
-                        {/* Target Display */}
-                        <div className="flex items-center justify-between text-xs bg-slate-50 p-2.5 rounded-lg border border-slate-100">
-                          <span className="text-slate-500 font-medium">الهدف المقرر:</span>
-                          <span className="font-bold text-navy-950">
-                            {item.targetSets} مجموعات × {item.targetReps} تكرار
-                          </span>
+                        {/* Target Editable Dosage */}
+                        <div className="grid grid-cols-2 gap-2 text-xs bg-slate-50 p-2.5 rounded-lg border border-slate-100">
+                          <div>
+                            <span className="text-[10px] text-slate-400 block mb-0.5">المجموعات المستهدفة (Sets):</span>
+                            <Input
+                              type="number"
+                              min={1}
+                              max={20}
+                              value={item.targetSets}
+                              onChange={(e) => handleUpdateTargetDosage(index, "targetSets", Number(e.target.value))}
+                              className="h-7 text-xs font-bold text-center bg-white"
+                            />
+                          </div>
+                          <div>
+                            <span className="text-[10px] text-slate-400 block mb-0.5">التكرار المستهدف (Reps):</span>
+                            <Input
+                              type="number"
+                              min={1}
+                              max={100}
+                              value={item.targetReps}
+                              onChange={(e) => handleUpdateTargetDosage(index, "targetReps", Number(e.target.value))}
+                              className="h-7 text-xs font-bold text-center bg-white"
+                            />
+                          </div>
                         </div>
 
                         {/* Interactive Counter: Sets (+1 / -1) */}
@@ -1882,7 +2742,7 @@ function PatientDetailPageContent() {
                               التكرارات المنجزة (Reps):
                             </span>
                             <span className="font-bold text-slate-800">
-                              {item.completedReps > 0 ? item.completedReps : item.targetReps} تكرار
+                              {item.completedReps} / {item.targetReps}
                             </span>
                           </div>
 
@@ -1899,7 +2759,7 @@ function PatientDetailPageContent() {
                             </Button>
 
                             <span className="font-extrabold text-base text-navy-950">
-                              {item.completedReps > 0 ? item.completedReps : item.targetReps}
+                              {item.completedReps}
                             </span>
 
                             <Button
@@ -1914,19 +2774,28 @@ function PatientDetailPageContent() {
                           </div>
                         </div>
 
-                        {/* Progress */}
-                        <div className="space-y-1">
-                          <div className="flex items-center justify-between text-[11px] text-slate-500">
-                            <span>نسبة الإنجاز</span>
-                            <span>{pct}%</span>
+                        {/* Completion Percentage Slider + Progress Bar */}
+                        <div className="space-y-1.5 p-2.5 rounded-lg bg-emerald-50/40 border border-emerald-100">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="font-semibold text-slate-700">نسبة الإنجاز (%):</span>
+                            <span className="font-mono font-extrabold text-emerald-700">{pct}%</span>
                           </div>
-                          <Progress value={pct} className="h-1.5 bg-slate-100" />
+                          <input
+                            type="range"
+                            min={0}
+                            max={100}
+                            step={5}
+                            value={pct}
+                            onChange={(e) => handleUpdateCompletionPct(index, Number(e.target.value))}
+                            className="w-full accent-emerald-600 cursor-pointer h-1.5"
+                          />
+                          <Progress value={pct} className="h-1.5 bg-slate-200" />
                         </div>
 
-                        {/* Instructions */}
-                        {item.exercise?.instructions && (
+                        {/* Notes / Instructions */}
+                        {(item.notes || item.exercise?.instructions) && (
                           <p className="text-[11px] text-slate-500 line-clamp-2">
-                            💡 {item.exercise.instructions}
+                            💡 {item.notes || item.exercise?.instructions}
                           </p>
                         )}
                       </CardContent>
@@ -1935,6 +2804,208 @@ function PatientDetailPageContent() {
                 })}
               </div>
             )}
+          </TabsContent>
+
+          {/* ═══════════════════════════════════════════ */}
+          {/* TAB 5: FULL CUMULATIVE SESSIONS LOG */}
+          {/* ═══════════════════════════════════════════ */}
+          <TabsContent value="sessions" className="space-y-6">
+            <Card className="border-slate-200/90 shadow-sm">
+              <CardHeader className="pb-4 border-b border-slate-100 bg-slate-50/60">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <CardTitle className="text-base sm:text-lg font-bold text-navy-950 flex items-center gap-2">
+                      <ClipboardList className="w-5 h-5 text-emerald-600" />
+                      <span>سجل الجلسات التأهيلية الكامل (من الجلسة #1 حتى آخر جلسة)</span>
+                    </CardTitle>
+                    <CardDescription className="text-xs text-slate-500">
+                      خانة متكاملة لكل جلسة توثق التمارين المنفذة، نسب الإنجاز، مستوى الألم، وملاحظات الطبيب التراكمية
+                    </CardDescription>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setSessionSortOrder((prev) => (prev === "asc" ? "desc" : "asc"))}
+                      className="text-xs gap-1.5 border-slate-300"
+                    >
+                      <ArrowUpDown className="w-3.5 h-3.5" />
+                      <span>{sessionSortOrder === "asc" ? "الترتيب: أول جلسة ← آخر جلسة" : "الترتيب: الأحدث أولاً"}</span>
+                    </Button>
+
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={openNewSessionModal}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold gap-1.5"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>إضافة جلسة جديدة</span>
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+
+              <CardContent className="p-6">
+                {orderedSessions.length === 0 ? (
+                  <div className="p-12 text-center space-y-3 border border-dashed border-slate-200 rounded-xl bg-slate-50/40">
+                    <ClipboardList className="w-10 h-10 text-slate-300 mx-auto" />
+                    <p className="text-sm font-bold text-slate-700">
+                      لا توجد جلسات تأهيل مسجلة في السجل التراكمي حتى الآن
+                    </p>
+                    <p className="text-xs text-slate-500 max-w-md mx-auto">
+                      سجّل الجلسة الأولى لتوثيق كافة التمارين ونسب إنجاز المريض ومؤشرات الألم والملاحظات السريرية.
+                    </p>
+                    <Button
+                      type="button"
+                      onClick={openNewSessionModal}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold gap-1.5 mt-2"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>تسجيل الجلسة الأولى (#1)</span>
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="space-y-5">
+                    {orderedSessions.map((sess) => {
+                      const completionAvg =
+                        sess.overallCompletion !== undefined
+                          ? sess.overallCompletion
+                          : sess.exercises?.length
+                          ? Math.round(
+                              sess.exercises.reduce((a, b) => a + (b.completionPercentage || 0), 0) /
+                                sess.exercises.length
+                            )
+                          : 100;
+
+                      return (
+                        <div
+                          key={sess.id}
+                          className="rounded-xl border border-slate-200 bg-white overflow-hidden shadow-xs"
+                        >
+                          {/* Session Header */}
+                          <div className="p-4 bg-slate-50/80 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                            <div className="flex items-center gap-3">
+                              <div className="w-11 h-11 rounded-xl bg-emerald-600 text-white flex flex-col items-center justify-center font-extrabold text-xs shrink-0 shadow-xs">
+                                <span>جلسة</span>
+                                <span className="text-sm leading-none">#{sess.sessionNumber}</span>
+                              </div>
+                              <div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <h4 className="font-bold text-sm text-navy-950">{sess.title}</h4>
+                                  {sess.phase && (
+                                    <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-800 border-emerald-200">
+                                      {getPhaseLabel(sess.phase).ar}
+                                    </Badge>
+                                  )}
+                                </div>
+                                <div className="text-xs text-slate-500 flex flex-wrap items-center gap-2 mt-0.5">
+                                  <span>📅 {formatDate(sess.date)}</span>
+                                  {sess.durationMinutes && <span>• ⏱️ {sess.durationMinutes} دقيقة</span>}
+                                  {sess.painLevel !== null && sess.painLevel !== undefined && (
+                                    <span>• 📊 الألم (VAS): <strong>{sess.painLevel}/10</strong></span>
+                                  )}
+                                  <span>• ✅ الإنجاز العام: <strong className="text-emerald-700">{completionAvg}%</strong></span>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-1.5 self-end sm:self-center">
+                              <Button
+                                type="button"
+                                variant="whatsapp"
+                                size="sm"
+                                onClick={() => handleShareSessionWhatsApp(sess)}
+                                className="h-8 text-xs gap-1"
+                              >
+                                <MessageCircle className="w-3.5 h-3.5" />
+                                <span>واتساب</span>
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => openEditSessionModal(sess)}
+                                className="h-8 text-xs gap-1 border-slate-300"
+                              >
+                                <Pencil className="w-3.5 h-3.5" />
+                                <span>تعديل</span>
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleDeleteSession(sess.id)}
+                                className="h-8 w-8 text-rose-500 hover:text-rose-700 hover:bg-rose-50"
+                                title="حذف الجلسة"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </Button>
+                            </div>
+                          </div>
+
+                          {/* Session Exercises Table */}
+                          {sess.exercises && sess.exercises.length > 0 && (
+                            <div className="overflow-x-auto border-b border-slate-100">
+                              <Table>
+                                <TableHeader className="bg-slate-50/60">
+                                  <TableRow>
+                                    <TableHead className="text-start text-xs">التمرين</TableHead>
+                                    <TableHead className="text-start text-xs">المجموعات (Sets)</TableHead>
+                                    <TableHead className="text-start text-xs">التكرارات (Reps)</TableHead>
+                                    <TableHead className="text-start text-xs">نسبة الإنجاز %</TableHead>
+                                    <TableHead className="text-start text-xs">ملاحظات</TableHead>
+                                  </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                  {sess.exercises.map((ex, eIdx) => (
+                                    <TableRow key={ex.id || eIdx} className="text-xs">
+                                      <TableCell className="font-semibold text-slate-900">
+                                        {ex.nameAr}
+                                        {ex.nameEn && <span className="text-[10px] text-slate-400 ms-1">({ex.nameEn})</span>}
+                                      </TableCell>
+                                      <TableCell className="font-mono font-bold">{ex.sets}</TableCell>
+                                      <TableCell className="font-mono font-bold">{ex.reps}</TableCell>
+                                      <TableCell>
+                                        <div className="flex items-center gap-2 min-w-[100px]">
+                                          <Progress value={ex.completionPercentage} className="h-1.5 flex-1 bg-slate-200" />
+                                          <span className="font-mono font-bold text-emerald-700">{ex.completionPercentage}%</span>
+                                        </div>
+                                      </TableCell>
+                                      <TableCell className="text-slate-500">{ex.notes || "—"}</TableCell>
+                                    </TableRow>
+                                  ))}
+                                </TableBody>
+                              </Table>
+                            </div>
+                          )}
+
+                          {/* Notes & Extra Details */}
+                          {(sess.notes || sess.extraDetails) && (
+                            <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-3 bg-slate-50/30 text-xs">
+                              {sess.notes && (
+                                <div className="p-2.5 rounded-lg bg-white border border-slate-200/80">
+                                  <span className="text-[11px] font-bold text-slate-500 block mb-0.5">ملاحظات الطبيب:</span>
+                                  <p className="text-slate-800 whitespace-pre-line">{sess.notes}</p>
+                                </div>
+                              )}
+                              {sess.extraDetails && (
+                                <div className="p-2.5 rounded-lg bg-white border border-slate-200/80">
+                                  <span className="text-[11px] font-bold text-slate-500 block mb-0.5">تفاصيل إضافية (استجابة / أجهزة / توصيات):</span>
+                                  <p className="text-slate-800 whitespace-pre-line">{sess.extraDetails}</p>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           </TabsContent>
 
           {/* ═══════════════════════════════════════════ */}
@@ -2264,7 +3335,7 @@ function PatientDetailPageContent() {
                   تحديد أو تغيير المرحلة التأهيلية
                 </DialogTitle>
                 <DialogDescription className="text-xs text-slate-500 mt-0.5">
-                  اختر المرحلة التأهيلية المناسبة لحالة المريض السريرية واكتب أسباب الترقية أو الانتقال
+                  اختر أي مرحلة من المراحل التالية للانتقال إليها مباشرة ومراجعة معاييرها الديناميكية
                 </DialogDescription>
               </div>
             </div>
@@ -2272,15 +3343,9 @@ function PatientDetailPageContent() {
 
           <div className="py-4 space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-              {[
-                { key: "ACUTE", ar: "المرحلة الحادة والتحكم بالألم", en: "Acute / Protection", desc: "السيطرة على التورم والألم وحماية الأنسجة الملتهبة" },
-                { key: "RESTORE_ROM", ar: "استعادة المدى الحركي الكامل", en: "Restore ROM & Mobility", desc: "استعادة المدى الحركي الكامل النشط والسلبي" },
-                { key: "STRENGTH", ar: "التقوية العضلية والتحمل", en: "Strength & Hypertrophy", desc: "بناء القوة القصوى والتحمل العضلي حول المفصل" },
-                { key: "NEUROMUSCULAR", ar: "التحكم العصبي العضلي والتوازن", en: "Neuromuscular Control", desc: "تحسين التوافق العضلي العصبي وثبات الجذع والتوازن" },
-                { key: "FUNCTIONAL", ar: "التأهيل الوظيفي والمحاكاة", en: "Functional & Agility", desc: "تمارين الرشاقة وتغيير الاتجاه والمحاكاة الحركية" },
-                { key: "RETURN_TO_SPORT", ar: "الجاهزية التامة والنزول للملعب", en: "Return to Sport", desc: "استيفاء 100% من معايير الاختبارات والمشاركة بالمباريات" },
-              ].map((phaseItem) => {
+              {REHAB_PHASES.map((phaseItem) => {
                 const isSelected = selectedNewPhase === phaseItem.key;
+                const isCurrent = currentPhaseKey === phaseItem.key;
                 return (
                   <div
                     key={phaseItem.key}
@@ -2293,9 +3358,18 @@ function PatientDetailPageContent() {
                     )}
                   >
                     <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="font-bold text-xs text-slate-900">{phaseItem.ar}</span>
-                        {isSelected && <Check className="w-4 h-4 text-emerald-600 shrink-0" />}
+                      <div className="flex items-center justify-between mb-1 gap-1.5">
+                        <span className="font-bold text-xs text-slate-900">
+                          {phaseItem.order}. {phaseItem.ar}
+                        </span>
+                        <div className="flex items-center gap-1 shrink-0">
+                          {isCurrent && (
+                            <Badge variant="outline" className="text-[9px] bg-white border-emerald-300 text-emerald-800 py-0 px-1.5">
+                              الحالية
+                            </Badge>
+                          )}
+                          {isSelected && <Check className="w-4 h-4 text-emerald-600" />}
+                        </div>
                       </div>
                       <span className="text-[11px] text-slate-400 block font-mono" dir="ltr">{phaseItem.en}</span>
                       <p className="text-[11px] text-slate-600 mt-1 leading-snug">{phaseItem.desc}</p>
@@ -2305,13 +3379,30 @@ function PatientDetailPageContent() {
               })}
             </div>
 
+            {/* Live Preview of Dynamic Criteria for Selected Phase + Injury */}
+            <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-bold text-slate-800">
+                  معايير المرحلة المختارة ({getPhaseLabel(selectedNewPhase).ar}):
+                </span>
+                <Badge variant="secondary" className="text-[10px]">
+                  {injuryCategoryMeta.labelAr}
+                </Badge>
+              </div>
+              <ul className="space-y-1 text-[11px] text-slate-600 list-disc ps-4">
+                {previewModalCriteria.map((c) => (
+                  <li key={c.id}>{c.textAr}</li>
+                ))}
+              </ul>
+            </div>
+
             <div className="space-y-1.5 pt-2 border-t border-slate-100">
               <label className="text-xs font-semibold text-slate-700">ملاحظات الانتقال السريرية (Transition Notes):</label>
               <Textarea
                 value={phaseTransitionNotes}
                 onChange={(e) => setPhaseTransitionNotes(e.target.value)}
-                placeholder="اكتب أسباب الترقية وملاحظات استجابة المريض للعلاج..."
-                rows={3}
+                placeholder="اكتب أسباب الانتقال وملاحظات استجابة المريض للعلاج..."
+                rows={2}
                 className="text-xs"
               />
             </div>
@@ -2357,7 +3448,7 @@ function PatientDetailPageContent() {
                     تعديل بيانات ملف المريض
                   </DialogTitle>
                   <DialogDescription className="text-xs text-slate-500 mt-0.5">
-                    تعديل البيانات الأساسية، التواريخ، والتشخيص الإكلينيكي في أي وقت
+                    تعديل كافة البيانات الشخصية، الحالة، التواريخ، والتشخيص الإكلينيكي في أي وقت
                   </DialogDescription>
                 </div>
               </div>
@@ -2394,6 +3485,15 @@ function PatientDetailPageContent() {
                   />
                 </div>
                 <div>
+                  <label className="font-semibold text-slate-700 block mb-1">تاريخ الميلاد</label>
+                  <Input
+                    type="date"
+                    value={editFormData.dateOfBirth}
+                    onChange={(e) => setEditFormData({ ...editFormData, dateOfBirth: e.target.value })}
+                    className="h-9 text-xs"
+                  />
+                </div>
+                <div>
                   <label className="font-semibold text-slate-700 block mb-1">الجنس</label>
                   <Select
                     value={editFormData.gender}
@@ -2405,6 +3505,22 @@ function PatientDetailPageContent() {
                     <SelectContent>
                       <SelectItem value="male">ذكر (Male)</SelectItem>
                       <SelectItem value="female">أنثى (Female)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">حالة الملف (Status)</label>
+                  <Select
+                    value={editFormData.status}
+                    onValueChange={(val) => setEditFormData({ ...editFormData, status: val })}
+                  >
+                    <SelectTrigger className="h-9 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="active">نشط — قيد التأهيل (Active)</SelectItem>
+                      <SelectItem value="completed">مكتمل التأهيل (Completed)</SelectItem>
+                      <SelectItem value="paused">متوقف مؤقتاً (Paused)</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -2500,6 +3616,605 @@ function PatientDetailPageContent() {
                 className="text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white"
               >
                 {isSavingEdit ? "جاري الحفظ..." : "حفظ التعديلات"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* ═══════════════════════════════════════════ */}
+      {/* MULTI-EXERCISE PICKER MODAL */}
+      {/* ═══════════════════════════════════════════ */}
+      <Dialog open={isAddExercisesModalOpen} onOpenChange={setIsAddExercisesModalOpen}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-bold text-navy-950 flex items-center gap-2">
+              <Dumbbell className="w-5 h-5 text-emerald-600" />
+              <span>إضافة تمرين أو عدة تمارين لملف المريض: {patient.name}</span>
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-500">
+              يمكنك تحديد تمرين واحد أو أكثر وضبط المجموعات (Sets) والتكرارات (Reps) ونسبة الإنجاز (%) لكل تمرين
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            {/* Quick Custom Exercise Creator */}
+            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
+              <span className="text-xs font-bold text-slate-700 block">
+                + إضافة تمرين مخصص سريع غير موجود بالقائمة:
+              </span>
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+                <Input
+                  value={customExNameAr}
+                  onChange={(e) => setCustomExNameAr(e.target.value)}
+                  placeholder="اسم التمرين بالعربي..."
+                  className="h-8 text-xs sm:col-span-2 bg-white"
+                />
+                <Input
+                  value={customExNameEn}
+                  onChange={(e) => setCustomExNameEn(e.target.value)}
+                  placeholder="English name (اختياري)"
+                  className="h-8 text-xs bg-white"
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={handleAddCustomExerciseToSelection}
+                  disabled={!customExNameAr.trim()}
+                  className="h-8 text-xs bg-slate-800 hover:bg-slate-900 text-white"
+                >
+                  إدراج في المختار
+                </Button>
+              </div>
+            </div>
+
+            {/* Search & Region Filter */}
+            <div className="flex flex-col sm:flex-row gap-2">
+              <div className="relative flex-1">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute start-3 top-1/2 -translate-y-1/2" />
+                <Input
+                  value={librarySearch}
+                  onChange={(e) => setLibrarySearch(e.target.value)}
+                  placeholder="ابحث باسم التمرين أو العضلة..."
+                  className="h-9 ps-8 text-xs"
+                />
+              </div>
+              <Select value={libraryRegion} onValueChange={setLibraryRegion}>
+                <SelectTrigger className="sm:w-44 h-9 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ALL">جميع المناطق</SelectItem>
+                  <SelectItem value="LOWER">الطرف السفلي</SelectItem>
+                  <SelectItem value="UPPER">الطرف العلوي</SelectItem>
+                  <SelectItem value="CORE">الجذع والعمود الفقري</SelectItem>
+                  <SelectItem value="FULL_BODY">كامل الجسم</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Exercises List with Multi-Select */}
+            <div className="max-h-72 overflow-y-auto space-y-2 border border-slate-200 rounded-xl p-2 bg-slate-50/40">
+              {isLoadingLibrary ? (
+                <div className="p-8 text-center text-xs text-slate-400">جاري تحميل مكتبة التمارين...</div>
+              ) : (
+                libraryExercises
+                  .filter((ex) => {
+                    const q = librarySearch.trim().toLowerCase();
+                    const matchesQ =
+                      !q ||
+                      ex.nameAr.toLowerCase().includes(q) ||
+                      ex.nameEn.toLowerCase().includes(q) ||
+                      (ex.category || "").toLowerCase().includes(q);
+                    const matchesR = libraryRegion === "ALL" || ex.region === libraryRegion;
+                    return matchesQ && matchesR;
+                  })
+                  .map((ex) => {
+                    const entry = selectedLibraryMap[ex.id];
+                    const isChecked = Boolean(entry?.selected);
+                    return (
+                      <div
+                        key={ex.id}
+                        className={cn(
+                          "p-3 rounded-xl border transition-all space-y-2.5",
+                          isChecked ? "bg-emerald-50/70 border-emerald-400" : "bg-white border-slate-200"
+                        )}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <label className="flex items-start gap-2.5 cursor-pointer flex-1">
+                            <Checkbox
+                              checked={isChecked}
+                              onCheckedChange={() => handleToggleLibraryPick(ex)}
+                              className="mt-0.5"
+                            />
+                            <div>
+                              <span className="font-bold text-xs text-slate-900 block">{ex.nameAr}</span>
+                              <span className="text-[11px] text-slate-500">{ex.nameEn} • {ex.category}</span>
+                            </div>
+                          </label>
+                          <Badge variant="secondary" className="text-[10px]">{ex.region}</Badge>
+                        </div>
+
+                        {isChecked && entry && (
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-emerald-200/70 text-[11px]">
+                            <div>
+                              <span className="text-slate-600 block mb-0.5">المجموعات (Sets):</span>
+                              <Input
+                                type="number"
+                                min={1}
+                                max={20}
+                                value={entry.sets}
+                                onChange={(e) =>
+                                  setSelectedLibraryMap((prev) => ({
+                                    ...prev,
+                                    [ex.id]: { ...entry, sets: Number(e.target.value) || 1 },
+                                  }))
+                                }
+                                className="h-7 text-xs bg-white text-center font-bold"
+                              />
+                            </div>
+                            <div>
+                              <span className="text-slate-600 block mb-0.5">التكرارات (Reps):</span>
+                              <Input
+                                type="number"
+                                min={1}
+                                max={100}
+                                value={entry.reps}
+                                onChange={(e) =>
+                                  setSelectedLibraryMap((prev) => ({
+                                    ...prev,
+                                    [ex.id]: { ...entry, reps: Number(e.target.value) || 1 },
+                                  }))
+                                }
+                                className="h-7 text-xs bg-white text-center font-bold"
+                              />
+                            </div>
+                            <div>
+                              <span className="text-slate-600 block mb-0.5">نسبة الإنجاز (%):</span>
+                              <Input
+                                type="number"
+                                min={0}
+                                max={100}
+                                value={entry.completionPercentage}
+                                onChange={(e) =>
+                                  setSelectedLibraryMap((prev) => ({
+                                    ...prev,
+                                    [ex.id]: {
+                                      ...entry,
+                                      completionPercentage: Math.min(100, Math.max(0, Number(e.target.value) || 0)),
+                                    },
+                                  }))
+                                }
+                                className="h-7 text-xs bg-white text-center font-bold"
+                              />
+                            </div>
+                            <div>
+                              <span className="text-slate-600 block mb-0.5">ملاحظات:</span>
+                              <Input
+                                value={entry.notes}
+                                onChange={(e) =>
+                                  setSelectedLibraryMap((prev) => ({
+                                    ...prev,
+                                    [ex.id]: { ...entry, notes: e.target.value },
+                                  }))
+                                }
+                                placeholder="ملاحظة..."
+                                className="h-7 text-xs bg-white"
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
+              )}
+            </div>
+          </div>
+
+          <DialogFooter className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+            <span className="text-xs font-bold text-emerald-700">
+              المختار للإضافة: {Object.values(selectedLibraryMap).filter((x) => x.selected).length} تمرين
+            </span>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setIsAddExercisesModalOpen(false)}
+                disabled={isSavingExercises}
+              >
+                إلغاء
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={handleSaveSelectedExercises}
+                disabled={
+                  isSavingExercises ||
+                  Object.values(selectedLibraryMap).filter((x) => x.selected).length === 0
+                }
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold"
+              >
+                {isSavingExercises ? "جاري الإضافة..." : "حفظ وإضافة التمارين لملف المريض"}
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ═══════════════════════════════════════════ */}
+      {/* FULL REHAB SESSION ADD / EDIT MODAL */}
+      {/* ═══════════════════════════════════════════ */}
+      <Dialog open={isSessionModalOpen} onOpenChange={setIsSessionModalOpen}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <form onSubmit={handleSaveSession}>
+            <DialogHeader>
+              <DialogTitle className="text-lg font-bold text-navy-950 flex items-center gap-2">
+                <ClipboardList className="w-5 h-5 text-emerald-600" />
+                <span>{editingSessionId ? "تعديل بيانات الجلسة التأهيلية" : "تسجيل جلسة تأهيلية جديدة في سجل المريض"}</span>
+              </DialogTitle>
+              <DialogDescription className="text-xs text-slate-500">
+                أضف تفاصيل الجلسة، التمارين المنفذة، المجموعات والتكرارات ونسب الإنجاز، وملاحظات الطبيب
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="py-4 space-y-4 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">عنوان الجلسة *</label>
+                  <Input
+                    required
+                    value={sessionTitle}
+                    onChange={(e) => setSessionTitle(e.target.value)}
+                    placeholder="مثال: جلسة تأهيل #1"
+                    className="h-9 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">تاريخ الجلسة *</label>
+                  <Input
+                    type="date"
+                    required
+                    value={sessionDate}
+                    onChange={(e) => setSessionDate(e.target.value)}
+                    className="h-9 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">المرحلة التأهيلية</label>
+                  <Select value={sessionPhase} onValueChange={setSessionPhase}>
+                    <SelectTrigger className="h-9 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {REHAB_PHASES.map((p) => (
+                        <SelectItem key={p.key} value={p.key}>
+                          {p.ar}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">مدة الجلسة (بالدقائق)</label>
+                  <Input
+                    type="number"
+                    min={5}
+                    max={240}
+                    value={sessionDuration}
+                    onChange={(e) => setSessionDuration(e.target.value)}
+                    className="h-9 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">مؤشر الألم في الجلسة (VAS 0-10)</label>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={10}
+                    value={sessionPainLevel}
+                    onChange={(e) => setSessionPainLevel(e.target.value)}
+                    className="h-9 text-xs"
+                  />
+                </div>
+              </div>
+
+              {/* Exercises Inside Session */}
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-bold text-slate-800">
+                    تمارين الجلسة ({sessionExercisesForm.length}):
+                  </span>
+                  {dailyExercises.length > 0 && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={handleImportScheduleToSession}
+                      className="h-7 text-[11px] border-emerald-300 text-emerald-800 bg-white hover:bg-emerald-50"
+                    >
+                      + استيراد تمارين الجدول الحالي ({dailyExercises.length})
+                    </Button>
+                  )}
+                </div>
+
+                {/* Add from library or custom */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <Select
+                    value={sessionExPickerId || undefined}
+                    onValueChange={(val) => handleAddLibraryExerciseToSession(val)}
+                  >
+                    <SelectTrigger className="h-8 text-xs bg-white">
+                      <SelectValue placeholder="اختر تمرين من المكتبة لإضافته للجلسة..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {libraryExercises.map((ex) => (
+                        <SelectItem key={ex.id} value={ex.id}>
+                          {ex.nameAr} ({ex.category})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+
+                  <div className="flex gap-1.5">
+                    <Input
+                      value={sessionCustomExName}
+                      onChange={(e) => setSessionCustomExName(e.target.value)}
+                      placeholder="أو اكتب اسم تمرين مخصص..."
+                      className="h-8 text-xs bg-white"
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={handleAddCustomExerciseToSession}
+                      disabled={!sessionCustomExName.trim()}
+                      className="h-8 text-xs bg-slate-800 hover:bg-slate-900 text-white shrink-0"
+                    >
+                      إضافة
+                    </Button>
+                  </div>
+                </div>
+
+                {sessionExercisesForm.length > 0 ? (
+                  <div className="space-y-2 max-h-56 overflow-y-auto">
+                    {sessionExercisesForm.map((row, rIdx) => (
+                      <div
+                        key={row.id || rIdx}
+                        className="p-2.5 bg-white rounded-lg border border-slate-200 grid grid-cols-1 sm:grid-cols-12 gap-2 items-center"
+                      >
+                        <div className="sm:col-span-4 font-bold text-slate-800 truncate">
+                          {row.nameAr}
+                        </div>
+                        <div className="sm:col-span-2">
+                          <span className="text-[10px] text-slate-400 block">Sets</span>
+                          <Input
+                            type="number"
+                            min={1}
+                            value={row.sets}
+                            onChange={(e) =>
+                              setSessionExercisesForm((prev) =>
+                                prev.map((it, i) => (i === rIdx ? { ...it, sets: Number(e.target.value) || 1 } : it))
+                              )
+                            }
+                            className="h-7 text-xs text-center"
+                          />
+                        </div>
+                        <div className="sm:col-span-2">
+                          <span className="text-[10px] text-slate-400 block">Reps</span>
+                          <Input
+                            type="number"
+                            min={1}
+                            value={row.reps}
+                            onChange={(e) =>
+                              setSessionExercisesForm((prev) =>
+                                prev.map((it, i) => (i === rIdx ? { ...it, reps: Number(e.target.value) || 1 } : it))
+                              )
+                            }
+                            className="h-7 text-xs text-center"
+                          />
+                        </div>
+                        <div className="sm:col-span-2">
+                          <span className="text-[10px] text-slate-400 block">إنجاز %</span>
+                          <Input
+                            type="number"
+                            min={0}
+                            max={100}
+                            value={row.completionPercentage}
+                            onChange={(e) =>
+                              setSessionExercisesForm((prev) =>
+                                prev.map((it, i) =>
+                                  i === rIdx
+                                    ? { ...it, completionPercentage: Math.min(100, Math.max(0, Number(e.target.value) || 0)) }
+                                    : it
+                                )
+                              )
+                            }
+                            className="h-7 text-xs text-center font-bold text-emerald-700"
+                          />
+                        </div>
+                        <div className="sm:col-span-2 flex items-end justify-end gap-1">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            onClick={() =>
+                              setSessionExercisesForm((prev) => prev.filter((_, i) => i !== rIdx))
+                            }
+                            className="h-7 w-7 text-rose-500 hover:text-rose-700"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-slate-400 text-center py-2">
+                    لم يتم إضافة تمارين لهذه الجلسة بعد.
+                  </p>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">ملاحظات الجلسة السريرية</label>
+                  <Textarea
+                    rows={3}
+                    value={sessionNotes}
+                    onChange={(e) => setSessionNotes(e.target.value)}
+                    placeholder="تطور الأداء، استجابة المفصل، جودة الحركة..."
+                    className="text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">تفاصيل إضافية (أجهزة / علاج يدوي / توصيات)</label>
+                  <Textarea
+                    rows={3}
+                    value={sessionExtraDetails}
+                    onChange={(e) => setSessionExtraDetails(e.target.value)}
+                    placeholder="استخدام كمادات باردة، جلسة BFR، توصيات الجلسة القادمة..."
+                    className="text-xs"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <DialogFooter className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setIsSessionModalOpen(false)}
+                disabled={isSavingSession}
+              >
+                إلغاء
+              </Button>
+              <Button
+                type="submit"
+                size="sm"
+                disabled={isSavingSession}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold"
+              >
+                {isSavingSession ? "جاري الحفظ..." : editingSessionId ? "حفظ تعديلات الجلسة" : "حفظ الجلسة في السجل"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* ═══════════════════════════════════════════ */}
+      {/* ADD MUSCLE GIRTH MEASUREMENT MODAL */}
+      {/* ═══════════════════════════════════════════ */}
+      <Dialog open={isAddGirthOpen} onOpenChange={setIsAddGirthOpen}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <form onSubmit={handleAddGirthSubmit}>
+            <DialogHeader>
+              <DialogTitle className="text-lg font-bold text-navy-950 flex items-center gap-2">
+                <Ruler className="w-5 h-5 text-emerald-600" />
+                <span>تسجيل قياس محيط العضلات الجديد</span>
+              </DialogTitle>
+              <DialogDescription className="text-xs text-slate-500">
+                أدخل قياسات الطرف المصاب والسليم لحساب الضمور ومؤشر التماثل العضلي (LSI%)
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="py-4 space-y-4 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">المعلم التشريحي (Landmark)</label>
+                  <Select value={girthLandmark} onValueChange={setGirthLandmark}>
+                    <SelectTrigger className="h-9 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="أعلى الرضفة — عضلة الفخذ (Above Patella / Thigh)">أعلى الرضفة — عضلة الفخذ</SelectItem>
+                      <SelectItem value="أدنى الرضفة — عضلة السمانة (Below Patella / Calf)">أدنى الرضفة — عضلة السمانة</SelectItem>
+                      <SelectItem value="محيط الذراع والعضد (Arm / Biceps)">محيط الذراع والعضد</SelectItem>
+                      <SelectItem value="محيط الساعد (Forearm)">محيط الساعد</SelectItem>
+                      <SelectItem value="محيط مفصل الكاحل (Ankle / Figure-of-8)">محيط الكاحل</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">تاريخ القياس</label>
+                  <Input
+                    type="date"
+                    value={girthDateInput}
+                    onChange={(e) => setGirthDateInput(e.target.value)}
+                    className="h-9 text-xs"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <span className="font-bold text-slate-700 block">القياسات عند المسافات (سم):</span>
+                {girthRowsInput.map((row, idx) => (
+                  <div key={idx} className="grid grid-cols-3 gap-2 items-center bg-slate-50 p-2 rounded-lg border border-slate-200">
+                    <div>
+                      <span className="text-[10px] text-slate-500 block">المسافة (سم)</span>
+                      <Input
+                        type="number"
+                        value={row.distanceCm}
+                        onChange={(e) =>
+                          setGirthRowsInput((prev) =>
+                            prev.map((r, i) => (i === idx ? { ...r, distanceCm: Number(e.target.value) } : r))
+                          )
+                        }
+                        className="h-8 text-xs bg-white text-center"
+                      />
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-emerald-700 font-semibold block">المصاب (سم) *</span>
+                      <Input
+                        type="number"
+                        step="0.1"
+                        placeholder="مثال: 42.5"
+                        value={row.injuredCm}
+                        onChange={(e) =>
+                          setGirthRowsInput((prev) =>
+                            prev.map((r, i) => (i === idx ? { ...r, injuredCm: e.target.value } : r))
+                          )
+                        }
+                        className="h-8 text-xs bg-white text-center font-bold"
+                      />
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-slate-500 block">السليم (سم)</span>
+                      <Input
+                        type="number"
+                        step="0.1"
+                        placeholder="مثال: 44.0"
+                        value={row.healthyCm}
+                        onChange={(e) =>
+                          setGirthRowsInput((prev) =>
+                            prev.map((r, i) => (i === idx ? { ...r, healthyCm: e.target.value } : r))
+                          )
+                        }
+                        className="h-8 text-xs bg-white text-center"
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <DialogFooter className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setIsAddGirthOpen(false)}
+                disabled={isSavingGirth}
+              >
+                إلغاء
+              </Button>
+              <Button
+                type="submit"
+                size="sm"
+                disabled={isSavingGirth}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold"
+              >
+                {isSavingGirth ? "جاري الحفظ..." : "حفظ القياس"}
               </Button>
             </DialogFooter>
           </form>

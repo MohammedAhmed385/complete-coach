@@ -60,6 +60,7 @@ import {
 } from "@/lib/utils";
 import { AdminGuard } from "@/components/auth/AdminGuard";
 import { useAuth } from "@/lib/auth-context";
+import { fetchMergedCases, removeLocalCase } from "@/lib/client-sync";
 
 // TypeScript interfaces for Cases and Appointments
 interface PatientItem {
@@ -177,41 +178,10 @@ function CasesContent() {
     setIsLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/cases");
-      let serverData: PatientItem[] = [];
-      if (res.ok) {
-        const data = await res.json();
-        serverData = Array.isArray(data) ? data : [];
-      }
-
-      // Merge with localStorage
-      let localData: PatientItem[] = [];
-      if (typeof window !== "undefined") {
-        try {
-          localData = JSON.parse(localStorage.getItem("revive_cases") || "[]");
-        } catch {}
-      }
-
-      const map = new Map<string, PatientItem>();
-      [...localData, ...serverData].forEach((item) => {
-        if (item && item.id) {
-          map.set(item.id, item);
-        }
-      });
-
-      setPatients(Array.from(map.values()));
+      const merged = await fetchMergedCases();
+      setPatients(merged);
     } catch (err: any) {
       console.error("Error fetching cases:", err);
-      // Fallback to local storage if API fails completely
-      if (typeof window !== "undefined") {
-        try {
-          const localData = JSON.parse(localStorage.getItem("revive_cases") || "[]");
-          if (localData.length > 0) {
-            setPatients(localData);
-            return;
-          }
-        } catch {}
-      }
       setError(err.message || "حدث خطأ أثناء تحميل الحالات");
     } finally {
       setIsLoading(false);
@@ -284,7 +254,7 @@ function CasesContent() {
         : patient.status;
 
     const messageLines = [
-      `*ملخص حالة المريض — Peak Motion* 🩺`,
+      `*ملخص حالة المريض — عيادة Revive* 🩺`,
       `━━━━━━━━━━━━━━━━━━━━`,
       `👤 *المريض:* ${patient.name}`,
       `🏥 *نوع الإصابة:* ${patient.injuryType}`,
@@ -296,7 +266,7 @@ function CasesContent() {
       `📊 *الحالة:* ${statusText}`,
       patient.notes ? `📝 *ملاحظات إكلينيكية:* ${patient.notes}` : null,
       `━━━━━━━━━━━━━━━━━━━━`,
-      `عيادة Peak Motion للعلاج الطبيعي والتأهيل الحركي`,
+      `عيادة Revive للعلاج الطبيعي والتأهيل الحركي`,
     ].filter(Boolean);
 
     const message = messageLines.join("\n");
@@ -376,13 +346,7 @@ function CasesContent() {
       }
 
       // Remove from state & localStorage
-      if (typeof window !== "undefined") {
-        try {
-          const localData = JSON.parse(localStorage.getItem("revive_cases") || "[]");
-          const filtered = localData.filter((c: any) => c.id !== patientToDelete.id);
-          localStorage.setItem("revive_cases", JSON.stringify(filtered));
-        } catch {}
-      }
+      removeLocalCase(patientToDelete.id);
       setPatients((prev) => prev.filter((p) => p.id !== patientToDelete.id));
       setPatientToDelete(null);
       fetchTodayAppointments();
@@ -633,18 +597,36 @@ function CasesContent() {
                   const phaseObj = currentProgram ? getPhaseLabel(currentProgram.phase) : null;
 
                   // Calculate Latest Girth Status
-                  const girthList = (patient as any).girthEvaluations || (patient as any).girthMeasurements || [];
+                  const gEv = (patient as any).girthEvaluations;
+                  const gMs = (patient as any).girthMeasurements;
+                  const girthList =
+                    Array.isArray(gEv) && gEv.length > 0
+                      ? gEv
+                      : Array.isArray(gMs) && gMs.length > 0
+                      ? gMs
+                      : [];
+                  let latestGirthInjured: number | null = null;
+                  let latestGirthHealthy: number | null = null;
                   let latestGirthDeficit: number | null = null;
                   let latestLsi: number | null = null;
-                  if (Array.isArray(girthList) && girthList.length > 0) {
+                  if (girthList.length > 0) {
                     const firstEval = girthList[0];
-                    if (firstEval?.measurements?.length > 0) {
-                      const m = firstEval.measurements[0];
-                      const injured = typeof m.injuredCm === "string" ? parseFloat(m.injuredCm) : Number(m.injuredCm);
-                      const healthy = m.healthyCm ? (typeof m.healthyCm === "string" ? parseFloat(m.healthyCm) : Number(m.healthyCm)) : null;
-                      if (!isNaN(injured) && healthy && !isNaN(healthy)) {
-                        latestGirthDeficit = Number((healthy - injured).toFixed(1));
-                        latestLsi = Math.round((injured / healthy) * 100);
+                    const validM = (firstEval?.measurements || []).find(
+                      (m: any) => m && m.injuredCm !== undefined && m.injuredCm !== null && !isNaN(Number(m.injuredCm))
+                    );
+                    if (validM) {
+                      const injured = Number(validM.injuredCm);
+                      const healthy =
+                        validM.healthyCm !== null && validM.healthyCm !== undefined && validM.healthyCm !== ""
+                          ? Number(validM.healthyCm)
+                          : null;
+                      if (!isNaN(injured)) {
+                        latestGirthInjured = injured;
+                        if (healthy !== null && !isNaN(healthy) && healthy > 0) {
+                          latestGirthHealthy = healthy;
+                          latestGirthDeficit = Number((healthy - injured).toFixed(1));
+                          latestLsi = Math.round((injured / healthy) * 100);
+                        }
                       }
                     }
                   }
@@ -739,19 +721,30 @@ function CasesContent() {
                             )}
 
                             {/* Muscle Girth Deficit Badge */}
-                            {latestGirthDeficit !== null ? (
+                            {latestGirthInjured !== null ? (
                               <Badge
                                 variant="outline"
                                 className={cn(
                                   "text-xs font-semibold py-0.5",
-                                  latestGirthDeficit > 0
+                                  latestGirthDeficit !== null && latestGirthDeficit > 0
                                     ? "bg-amber-50 text-amber-800 border-amber-200"
                                     : "bg-emerald-50 text-emerald-800 border-emerald-200"
                                 )}
                               >
                                 <span>📐 محيط: </span>
-                                <span>{latestGirthDeficit > 0 ? `-${latestGirthDeficit} سم` : "متماثل"}</span>
-                                {latestLsi && <span className="ms-1 font-mono text-[11px]">({latestLsi}%)</span>}
+                                {latestGirthHealthy !== null && latestGirthDeficit !== null ? (
+                                  <>
+                                    <span>
+                                      {latestGirthInjured}/{latestGirthHealthy} سم (
+                                      {latestGirthDeficit > 0 ? `-${latestGirthDeficit} سم` : "متماثل"})
+                                    </span>
+                                    {latestLsi !== null && (
+                                      <span className="ms-1 font-mono text-[11px]">• {latestLsi}%</span>
+                                    )}
+                                  </>
+                                ) : (
+                                  <span>{latestGirthInjured} سم</span>
+                                )}
                               </Badge>
                             ) : (
                               <Badge variant="outline" className="text-[11px] text-slate-400 border-slate-200 py-0.5">

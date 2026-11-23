@@ -5,6 +5,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAuth, ADMIN_EMAIL } from "@/lib/auth-context";
+import { upsertLocalCase } from "@/lib/client-sync";
 import {
   User,
   Activity,
@@ -572,7 +573,9 @@ export default function AddCasePage() {
     // Prepare Girth payload
     const girthPayload = girthEvaluations
       .map((evaluation) => ({
+        id: evaluation.id,
         landmark: evaluation.landmark,
+        date: evaluation.date || new Date().toISOString(),
         measurements: evaluation.measurements
           .filter((m) => m.injuredCm.trim() !== "")
           .map((m) => ({
@@ -583,7 +586,9 @@ export default function AddCasePage() {
       }))
       .filter((ev) => ev.measurements.length > 0);
 
+    const caseId = `case-${Date.now()}`;
     const payload = {
+      id: caseId,
       name: patientForm.name.trim(),
       phone: patientForm.phone.trim() || undefined,
       email: patientForm.email.trim() || undefined,
@@ -598,6 +603,7 @@ export default function AddCasePage() {
       notes: patientForm.notes.trim() || undefined,
       romMeasurements: romPayload,
       girthEvaluations: girthPayload,
+      girthMeasurements: girthPayload,
       rehabPhase: rehabProgram.phase,
       rehabNotes: rehabProgram.notes.trim() || undefined,
     };
@@ -619,22 +625,23 @@ export default function AddCasePage() {
       }
 
       const createdPatient = await response.json().catch(() => null);
-
-      if (typeof window !== "undefined") {
-        try {
-          const localCases = JSON.parse(localStorage.getItem("revive_cases") || "[]");
-          const caseToStore = createdPatient || {
-            id: `case-${Date.now()}`,
-            ...payload,
-            status: "active",
-            createdAt: new Date().toISOString(),
-          };
-          const updated = [caseToStore, ...localCases.filter((c: any) => c.id !== caseToStore.id)];
-          localStorage.setItem("revive_cases", JSON.stringify(updated));
-        } catch (e) {
-          console.warn("localStorage save skipped:", e);
-        }
-      }
+      const caseToStore = createdPatient || {
+        ...payload,
+        status: "active",
+        assignedExercises: [],
+        sessions: [],
+        rehabPrograms: [
+          {
+            id: `prog-${Date.now()}`,
+            phase: rehabProgram.phase,
+            isActive: true,
+            notes: rehabProgram.notes.trim() || "المرحلة التأهيلية المحددة",
+            startDate: patientForm.rehabStartDate || new Date().toISOString(),
+          },
+        ],
+        createdAt: new Date().toISOString(),
+      };
+      upsertLocalCase(caseToStore);
 
       setSuccessMessage("تم حفظ الحالة والقياسات بنجاح! جاري التوجيه إلى قائمة الحالات...");
       setTimeout(() => {

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback } from "react";
+import Link from "next/link";
 import {
   Card,
   CardHeader,
@@ -49,6 +50,7 @@ import {
 } from "lucide-react";
 import { cn, formatDate, getPhaseLabel } from "@/lib/utils";
 import { AdminGuard } from "@/components/auth/AdminGuard";
+import { fetchMergedCases, fetchMergedRtp, saveRtpWithSync } from "@/lib/client-sync";
 
 // ── TYPES ──
 
@@ -769,18 +771,23 @@ function ReturnToPlayContent() {
     return checklistState[activePhase] || getPhaseCriteriaState(activePhase);
   }, [checklistState, activePhase, getPhaseCriteriaState]);
 
-  // Fetch Patients on Mount
+  // Fetch Patients on Mount (Merged Server + Local) and honor ?patientId=
   useEffect(() => {
     async function fetchPatients() {
       setIsPatientsLoading(true);
       setErrorMessage(null);
       try {
-        const res = await fetch("/api/cases");
-        if (!res.ok) throw new Error("تعذر جلب قائمة المرضى");
-        const data = await res.json();
+        const data = await fetchMergedCases();
         setPatients(data);
         if (data.length > 0) {
-          setSelectedPatientId(data[0].id);
+          let initialId = data[0].id;
+          if (typeof window !== "undefined") {
+            const qp = new URLSearchParams(window.location.search).get("patientId");
+            if (qp && data.some((p: any) => p.id === qp)) {
+              initialId = qp;
+            }
+          }
+          setSelectedPatientId(initialId);
         }
       } catch (err: unknown) {
         console.error("Error fetching cases:", err);
@@ -804,9 +811,7 @@ function ReturnToPlayContent() {
     }
     setIsHistoryLoading(true);
     try {
-      const res = await fetch(`/api/rtp?patientId=${patientId}`);
-      if (!res.ok) throw new Error("تعذر جلب سجل التقييمات");
-      const data = await res.json();
+      const data = await fetchMergedRtp(patientId);
       setHistoryEvaluations(data);
     } catch (err) {
       console.error("Error fetching RTP history:", err);
@@ -999,25 +1004,16 @@ function ReturnToPlayContent() {
         patientId: selectedPatientId,
         patient: selectedPatientId,
         phase: activePhase,
-        protocolName: "Peak Motion Return-to-Play Criteria",
+        protocolName: "عيادة Revive — معايير العودة للملعب (RTP)",
         readinessScore: stats.score,
         score: stats.score,
         criteria: criteriaPayload,
       };
 
-      const res = await fetch("/api/rtp", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || "فشل حفظ التقييم في الخادم");
-      }
+      await saveRtpWithSync(payload);
 
       setSaveSuccessMessage(
-        `تم حفظ تقييم الجاهزية بنجاح! نسبة الجاهزية المسجلة: ${stats.score}% (${stats.passed} من أصل ${stats.total} معيار).`
+        `تم حفظ تقييم الجاهزية بنجاح وربطه بملف المريض! نسبة الجاهزية المسجلة: ${stats.score}% (${stats.passed} من أصل ${stats.total} معيار).`
       );
 
       // Refresh history immediately
@@ -1077,18 +1073,27 @@ function ReturnToPlayContent() {
 
         {/* ── NOTIFICATION BANNERS ── */}
         {saveSuccessMessage && (
-          <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 flex items-start gap-3 shadow-sm animate-fade-in">
+          <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 flex flex-wrap items-start gap-3 shadow-sm animate-fade-in">
             <CheckCircle2 className="w-5 h-5 text-emerald-600 mt-0.5 shrink-0" />
-            <div className="flex-1 text-sm font-medium">
+            <div className="flex-1 text-sm font-medium min-w-[200px]">
               <p className="font-bold text-emerald-950">عملية حفظ ناجحة!</p>
               <p className="text-emerald-800 mt-0.5">{saveSuccessMessage}</p>
             </div>
-            <button
-              onClick={() => setSaveSuccessMessage(null)}
-              className="text-emerald-700 hover:text-emerald-900 text-xs font-bold"
-            >
-              إغلاق
-            </button>
+            <div className="flex items-center gap-2">
+              {selectedPatientId && (
+                <Button asChild size="sm" variant="outline" className="h-8 text-xs border-emerald-400 text-emerald-800 bg-white hover:bg-emerald-100">
+                  <Link href={`/cases/${selectedPatientId}`}>
+                    عرض التقييم في ملف المريض ←
+                  </Link>
+                </Button>
+              )}
+              <button
+                onClick={() => setSaveSuccessMessage(null)}
+                className="text-emerald-700 hover:text-emerald-900 text-xs font-bold px-2"
+              >
+                إغلاق
+              </button>
+            </div>
           </div>
         )}
 

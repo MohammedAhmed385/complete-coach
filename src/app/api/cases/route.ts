@@ -24,6 +24,10 @@ export async function GET(request: NextRequest) {
         orderBy: { createdAt: "desc" },
         include: {
           romMeasurements: { orderBy: { date: "desc" }, take: 5 },
+          girthMeasurements: {
+            include: { measurements: true },
+            orderBy: { date: "desc" },
+          },
           rehabPrograms: { where: { isActive: true }, take: 1 },
           appointments: { orderBy: { date: "desc" }, take: 3 },
         },
@@ -64,11 +68,23 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const normalizedGirth = Array.isArray(body.girthEvaluations)
+      ? body.girthEvaluations.map((ev: any, idx: number) => ({
+          id: ev.id || `girth-${Date.now()}-${idx}`,
+          landmark: ev.landmark || "محيط العضلات",
+          date: ev.date || new Date().toISOString(),
+          measurements: Array.isArray(ev.measurements) ? ev.measurements : [],
+        }))
+      : [];
+
     // Save in Live Store with KV support first for guaranteed multi-device persistence
     const saved = await saveLiveCaseAsync({
       id: body.id,
       name: body.name,
-      phone: body.phone,
+      phone: body.phone || null,
+      email: body.email || null,
+      dateOfBirth: body.dateOfBirth || null,
+      gender: body.gender || null,
       injuryType: body.injuryType,
       injuredSide: body.injuredSide || "RIGHT",
       injuryDate: body.injuryDate || new Date().toISOString(),
@@ -79,13 +95,18 @@ export async function POST(request: NextRequest) {
       status: "active",
       rehabPrograms: [
         {
+          id: `prog-${Date.now()}`,
           phase: body.rehabPhase || "ACUTE",
           isActive: true,
           notes: body.rehabNotes || "المرحلة التأهيلية المحددة",
+          startDate: body.rehabStartDate || new Date().toISOString(),
         },
       ],
       romMeasurements: body.romMeasurements || [],
-      girthEvaluations: body.girthEvaluations || [],
+      girthEvaluations: normalizedGirth,
+      girthMeasurements: normalizedGirth,
+      assignedExercises: [],
+      sessions: [],
     });
 
     // Try syncing to DB if reachable
@@ -102,6 +123,9 @@ export async function POST(request: NextRequest) {
               id: saved.id,
               name: body.name,
               phone: body.phone || null,
+              email: body.email || null,
+              dateOfBirth: body.dateOfBirth ? new Date(body.dateOfBirth) : null,
+              gender: body.gender || null,
               injuryType: body.injuryType,
               injuryDate: new Date(body.injuryDate || Date.now()),
               surgeryDate: body.surgeryDate ? new Date(body.surgeryDate) : null,
@@ -110,6 +134,40 @@ export async function POST(request: NextRequest) {
               mechanismOfInjury: body.mechanismOfInjury || null,
               notes: body.notes || null,
               userId: userId,
+              rehabPrograms: {
+                create: {
+                  phase: body.rehabPhase || "ACUTE",
+                  startDate: new Date(body.rehabStartDate || Date.now()),
+                  isActive: true,
+                  notes: body.rehabNotes || "المرحلة التأهيلية المحددة",
+                },
+              },
+              romMeasurements: Array.isArray(body.romMeasurements) && body.romMeasurements.length > 0
+                ? {
+                    create: body.romMeasurements.map((r: any) => ({
+                      joint: r.joint,
+                      movement: r.movement,
+                      injuredAngle: Number(r.injuredAngle) || 0,
+                      healthyAngle: r.healthyAngle !== undefined && r.healthyAngle !== null ? Number(r.healthyAngle) : null,
+                      notes: r.notes || null,
+                    })),
+                  }
+                : undefined,
+              girthMeasurements: normalizedGirth.length > 0
+                ? {
+                    create: normalizedGirth.map((g: any) => ({
+                      landmark: g.landmark,
+                      date: g.date ? new Date(g.date) : new Date(),
+                      measurements: {
+                        create: (g.measurements || []).map((m: any) => ({
+                          distanceCm: Number(m.distanceCm) || 0,
+                          injuredCm: Number(m.injuredCm) || 0,
+                          healthyCm: m.healthyCm !== undefined && m.healthyCm !== null ? Number(m.healthyCm) : null,
+                        })),
+                      },
+                    })),
+                  }
+                : undefined,
             },
           });
         }

@@ -309,12 +309,12 @@ function ResearchContent() {
   // WhatsApp Share helper
   const getWhatsAppShareUrl = (title: string, pmid: string, journal?: string, date?: string) => {
     const text =
-      `*Peak Motion — دراسة طبية معتمدة من PubMed*\n` +
+      `*عيادة Revive — دراسة طبية معتمدة من PubMed*\n` +
       `📌 *العنوان:* ${title}\n` +
       (journal ? `📖 *المجلة:* ${journal}\n` : "") +
       (date ? `📅 *التاريخ:* ${date}\n` : "") +
       `🔗 *رابط البحث:* https://pubmed.ncbi.nlm.nih.gov/${pmid}/\n\n` +
-      `تمت المشاركة عبر نظام Peak Motion لإدارة الحالات والتأهيل الرياضي`;
+      `تمت المشاركة عبر عيادة Revive لإدارة الحالات والتأهيل الرياضي`;
     return generateWhatsAppShareLink(text);
   };
 

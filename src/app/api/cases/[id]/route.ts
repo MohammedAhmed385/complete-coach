@@ -85,7 +85,7 @@ export async function PATCH(
   let updatedPrograms = body.rehabPrograms;
   if (body.phase) {
     const cases = await getLiveCasesAsync();
-    const existingCase = cases.find((c) => c.id === id);
+    const existingCase = cases.find((c) => c.id === id) || body._baseSnapshot;
     const prevPrograms = existingCase?.rehabPrograms || [];
     updatedPrograms = [
       {
@@ -95,7 +95,7 @@ export async function PATCH(
         isActive: true,
         startDate: new Date().toISOString(),
       },
-      ...prevPrograms.map((p) => ({ ...p, isActive: false })),
+      ...prevPrograms.map((p: any) => ({ ...p, isActive: false })),
     ];
   }
 
@@ -122,7 +122,7 @@ export async function PATCH(
         if (body[k] !== undefined) {
           if ((k === "injuryDate" || k === "rehabStartDate") && body[k]) {
             dbData[k] = new Date(body[k]);
-          } else if (k === "surgeryDate") {
+          } else if (k === "surgeryDate" || k === "dateOfBirth") {
             dbData[k] = body[k] ? new Date(body[k]) : null;
           } else {
             dbData[k] = body[k];

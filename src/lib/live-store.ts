@@ -79,6 +79,60 @@ export async function getCloudflareKV(): Promise<CloudflareKVNamespace | null> {
 // CASES STORAGE
 // ──────────────────────────────────────────────
 
+export interface PatientAssignedExercise {
+  id: string;
+  exerciseId: string;
+  exercise: {
+    id: string;
+    nameAr: string;
+    nameEn: string;
+    region?: string;
+    category?: string;
+    isIsometric?: boolean;
+    isometricAngle?: number | null;
+    instructions?: string | null;
+    youtubeSearch?: string | null;
+  };
+  targetSets: number;
+  targetReps: number;
+  completedSets: number;
+  completedReps: number;
+  completionPercentage: number;
+  holdSeconds?: number | null;
+  restSeconds?: number | null;
+  notes?: string | null;
+  orderIndex: number;
+  addedAt?: string;
+}
+
+export interface SessionExerciseEntry {
+  id: string;
+  exerciseId?: string;
+  nameAr: string;
+  nameEn?: string;
+  category?: string;
+  sets: number;
+  reps: number;
+  completionPercentage: number;
+  notes?: string | null;
+}
+
+export interface PatientRehabSession {
+  id: string;
+  sessionNumber: number;
+  date: string;
+  title: string;
+  phase?: string;
+  durationMinutes?: number | null;
+  painLevel?: number | null;
+  overallCompletion?: number;
+  exercises: SessionExerciseEntry[];
+  notes?: string | null;
+  extraDetails?: string | null;
+  createdAt: string;
+  updatedAt?: string;
+}
+
 export interface LiveCase {
   id: string;
   name: string;
@@ -96,12 +150,16 @@ export interface LiveCase {
   status: "active" | "completed" | "paused";
   createdAt: string;
   updatedAt?: string;
+  isRestDay?: boolean;
+  phaseCriteriaStatus?: Record<string, Record<string, boolean>>;
   rehabPrograms?: Array<{
     id?: string;
     phase: string;
     notes?: string | null;
     isActive: boolean;
     startDate?: string;
+    endDate?: string | null;
+    programExercises?: any[];
   }>;
   romMeasurements?: Array<{
     id?: string;
@@ -135,6 +193,8 @@ export interface LiveCase {
       healthyCm?: number | null;
     }>;
   }>;
+  assignedExercises?: PatientAssignedExercise[];
+  sessions?: PatientRehabSession[];
   rtpEvaluations?: Array<{
     id: string;
     patientId: string;
@@ -163,12 +223,13 @@ export interface LiveCase {
       nameAr: string;
       nameEn: string;
       percentage: number;
-      role: "primary" | "secondary";
+      role: "primary" | "secondary" | "stabilizer";
     }>;
     summaryNotes?: string | null;
     poseResults?: any;
     kneeValgus?: any;
     thumbnailUrl?: string | null;
+    videoUrl?: string | null;
   }>;
 }
 
@@ -207,49 +268,89 @@ export async function getLiveCasesAsync(): Promise<LiveCase[]> {
   return getLiveCases();
 }
 
-export function saveLiveCase(newCase: Partial<LiveCase>): LiveCase {
+function normalizeGirthList(list: any): LiveCase["girthEvaluations"] {
+  if (!Array.isArray(list)) return [];
+  return list.map((ev, idx) => ({
+    ...ev,
+    id: ev?.id || `girth-${Date.now()}-${idx}`,
+    date: ev?.date || ev?.createdAt || new Date().toISOString(),
+    landmark: ev?.landmark || "محيط العضلات",
+    measurements: Array.isArray(ev?.measurements) ? ev.measurements : [],
+  }));
+}
+
+export async function getLiveCaseByIdAsync(id: string): Promise<LiveCase | null> {
+  const list = await getLiveCasesAsync();
+  return list.find((c) => c.id === id) || null;
+}
+
+export function saveLiveCase(
+  newCase: Partial<LiveCase> & { _baseSnapshot?: Partial<LiveCase> }
+): LiveCase {
   getLiveCases();
   const caseId = newCase.id || `case-${Date.now()}`;
   const existingIndex = memoryCases.findIndex((c) => c.id === caseId);
   const existingCase = existingIndex >= 0 ? memoryCases[existingIndex] : null;
+  const base: Partial<LiveCase> | null = existingCase ?? newCase._baseSnapshot ?? null;
 
-  // Harmonize girthEvaluations and girthMeasurements
-  const resolvedGirth =
-    newCase.girthEvaluations ||
-    newCase.girthMeasurements ||
-    existingCase?.girthEvaluations ||
-    existingCase?.girthMeasurements ||
-    [];
+  // Harmonize girthEvaluations and girthMeasurements without empty-array truthiness trap
+  let resolvedGirth: LiveCase["girthEvaluations"] = [];
+  if (newCase.girthEvaluations !== undefined) {
+    resolvedGirth = normalizeGirthList(newCase.girthEvaluations);
+  } else if (newCase.girthMeasurements !== undefined) {
+    resolvedGirth = normalizeGirthList(newCase.girthMeasurements);
+  } else if (base?.girthEvaluations && base.girthEvaluations.length > 0) {
+    resolvedGirth = normalizeGirthList(base.girthEvaluations);
+  } else if (base?.girthMeasurements && base.girthMeasurements.length > 0) {
+    resolvedGirth = normalizeGirthList(base.girthMeasurements);
+  }
 
   // Merge rehab programs properly
-  let resolvedRehabPrograms = newCase.rehabPrograms || existingCase?.rehabPrograms;
-  if (!resolvedRehabPrograms || resolvedRehabPrograms.length === 0) {
-    resolvedRehabPrograms = [{ phase: "ACUTE", isActive: true, notes: "المرحلة الأولية" }];
-  }
+  let resolvedRehabPrograms =
+    newCase.rehabPrograms && newCase.rehabPrograms.length > 0
+      ? newCase.rehabPrograms
+      : base?.rehabPrograms && base.rehabPrograms.length > 0
+      ? base.rehabPrograms
+      : [
+          {
+            id: `prog-${caseId}`,
+            phase: "ACUTE",
+            isActive: true,
+            notes: "المرحلة الأولية",
+            startDate: new Date().toISOString(),
+          },
+        ];
 
   const completeCase: LiveCase = {
     id: caseId,
-    name: newCase.name ?? existingCase?.name ?? "مريض جديد",
-    phone: newCase.phone !== undefined ? newCase.phone : (existingCase?.phone ?? null),
-    email: newCase.email !== undefined ? newCase.email : (existingCase?.email ?? null),
-    dateOfBirth: newCase.dateOfBirth !== undefined ? newCase.dateOfBirth : (existingCase?.dateOfBirth ?? null),
-    gender: newCase.gender !== undefined ? newCase.gender : (existingCase?.gender ?? null),
-    injuryType: newCase.injuryType ?? existingCase?.injuryType ?? "إصابة رياضية",
-    injuredSide: (newCase.injuredSide as any) ?? existingCase?.injuredSide ?? "RIGHT",
-    injuryDate: newCase.injuryDate ?? existingCase?.injuryDate ?? new Date().toISOString(),
-    surgeryDate: newCase.surgeryDate !== undefined ? newCase.surgeryDate : (existingCase?.surgeryDate ?? null),
-    rehabStartDate: newCase.rehabStartDate ?? existingCase?.rehabStartDate ?? new Date().toISOString(),
-    mechanismOfInjury: newCase.mechanismOfInjury !== undefined ? newCase.mechanismOfInjury : (existingCase?.mechanismOfInjury ?? null),
-    notes: newCase.notes !== undefined ? newCase.notes : (existingCase?.notes ?? null),
-    status: (newCase.status as any) ?? existingCase?.status ?? "active",
-    createdAt: existingCase?.createdAt ?? newCase.createdAt ?? new Date().toISOString(),
+    name: newCase.name ?? base?.name ?? "مريض جديد",
+    phone: newCase.phone !== undefined ? newCase.phone : (base?.phone ?? null),
+    email: newCase.email !== undefined ? newCase.email : (base?.email ?? null),
+    dateOfBirth: newCase.dateOfBirth !== undefined ? newCase.dateOfBirth : (base?.dateOfBirth ?? null),
+    gender: newCase.gender !== undefined ? newCase.gender : (base?.gender ?? null),
+    injuryType: newCase.injuryType ?? base?.injuryType ?? "إصابة رياضية",
+    injuredSide: (newCase.injuredSide as any) ?? base?.injuredSide ?? "RIGHT",
+    injuryDate: newCase.injuryDate ?? base?.injuryDate ?? new Date().toISOString(),
+    surgeryDate: newCase.surgeryDate !== undefined ? newCase.surgeryDate : (base?.surgeryDate ?? null),
+    rehabStartDate: newCase.rehabStartDate ?? base?.rehabStartDate ?? new Date().toISOString(),
+    mechanismOfInjury:
+      newCase.mechanismOfInjury !== undefined
+        ? newCase.mechanismOfInjury
+        : (base?.mechanismOfInjury ?? null),
+    notes: newCase.notes !== undefined ? newCase.notes : (base?.notes ?? null),
+    status: (newCase.status as any) ?? base?.status ?? "active",
+    createdAt: base?.createdAt ?? newCase.createdAt ?? new Date().toISOString(),
     updatedAt: new Date().toISOString(),
+    isRestDay: newCase.isRestDay !== undefined ? newCase.isRestDay : (base?.isRestDay ?? false),
+    phaseCriteriaStatus: newCase.phaseCriteriaStatus ?? base?.phaseCriteriaStatus ?? {},
     rehabPrograms: resolvedRehabPrograms,
-    romMeasurements: newCase.romMeasurements ?? existingCase?.romMeasurements ?? [],
+    romMeasurements: newCase.romMeasurements ?? base?.romMeasurements ?? [],
     girthEvaluations: resolvedGirth,
     girthMeasurements: resolvedGirth,
-    rtpEvaluations: newCase.rtpEvaluations ?? existingCase?.rtpEvaluations ?? [],
-    videoAnalyses: newCase.videoAnalyses ?? existingCase?.videoAnalyses ?? [],
+    assignedExercises: newCase.assignedExercises ?? base?.assignedExercises ?? [],
+    sessions: newCase.sessions ?? base?.sessions ?? [],
+    rtpEvaluations: newCase.rtpEvaluations ?? base?.rtpEvaluations ?? [],
+    videoAnalyses: newCase.videoAnalyses ?? base?.videoAnalyses ?? [],
   };
 
   if (existingIndex >= 0) {
@@ -262,7 +363,10 @@ export function saveLiveCase(newCase: Partial<LiveCase>): LiveCase {
   return completeCase;
 }
 
-export async function saveLiveCaseAsync(newCase: Partial<LiveCase>): Promise<LiveCase> {
+export async function saveLiveCaseAsync(
+  newCase: Partial<LiveCase> & { _baseSnapshot?: Partial<LiveCase> }
+): Promise<LiveCase> {
+  await getLiveCasesAsync();
   const saved = saveLiveCase(newCase);
   try {
     const kv = await getCloudflareKV();
@@ -273,6 +377,267 @@ export async function saveLiveCaseAsync(newCase: Partial<LiveCase>): Promise<Liv
     console.warn("KV put cases skipped:", err);
   }
   return saved;
+}
+
+async function persistMemoryCasesAsync(): Promise<void> {
+  safeWriteFile("cases.json", JSON.stringify(memoryCases, null, 2));
+  try {
+    const kv = await getCloudflareKV();
+    if (kv) {
+      await kv.put("cases", JSON.stringify(memoryCases));
+    }
+  } catch (err) {
+    console.warn("KV put cases skipped:", err);
+  }
+}
+
+export async function addCaseExercisesAsync(
+  caseId: string,
+  items: Partial<PatientAssignedExercise>[],
+  baseSnapshot?: Partial<LiveCase>
+): Promise<PatientAssignedExercise[]> {
+  await getLiveCasesAsync();
+  await getLiveExercisesAsync();
+
+  let existingCase = memoryCases.find((c) => c.id === caseId);
+  if (!existingCase) {
+    existingCase = saveLiveCase({ id: caseId, _baseSnapshot: baseSnapshot });
+  }
+
+  const currentList = [...(existingCase.assignedExercises || [])];
+  const baseOrder = currentList.length;
+
+  const newEntries: PatientAssignedExercise[] = items.map((item, idx) => {
+    const libEx = item.exerciseId
+      ? memoryExercises.find((e) => e.id === item.exerciseId)
+      : undefined;
+    const resolvedEx = item.exercise?.nameAr
+      ? {
+          id: item.exercise.id || item.exerciseId || `ex-${Date.now()}-${idx}`,
+          nameAr: item.exercise.nameAr,
+          nameEn: item.exercise.nameEn || item.exercise.nameAr,
+          region: item.exercise.region || libEx?.region || "LOWER",
+          category: item.exercise.category || libEx?.category || "Rehab",
+          isIsometric: item.exercise.isIsometric ?? libEx?.isIsometric ?? false,
+          isometricAngle: item.exercise.isometricAngle ?? libEx?.isometricAngle ?? null,
+          instructions: item.exercise.instructions ?? libEx?.instructions ?? null,
+          youtubeSearch: item.exercise.youtubeSearch ?? libEx?.youtubeSearch ?? null,
+        }
+      : {
+          id: libEx?.id || item.exerciseId || `ex-${Date.now()}-${idx}`,
+          nameAr: libEx?.nameAr || "تمرين تأهيلي مخصص",
+          nameEn: libEx?.nameEn || "Custom Rehab Exercise",
+          region: libEx?.region || "LOWER",
+          category: libEx?.category || "Rehab",
+          isIsometric: libEx?.isIsometric ?? false,
+          isometricAngle: libEx?.isometricAngle ?? null,
+          instructions: libEx?.instructions ?? null,
+          youtubeSearch: libEx?.youtubeSearch ?? null,
+        };
+
+    const targetSets = Math.max(1, Number(item.targetSets) || 3);
+    const targetReps = Math.max(1, Number(item.targetReps) || 10);
+    const completedSets = Math.max(0, Number(item.completedSets) || 0);
+    const completedReps = Math.max(0, Number(item.completedReps) || 0);
+    const completionPercentage =
+      item.completionPercentage !== undefined
+        ? Math.min(100, Math.max(0, Math.round(Number(item.completionPercentage))))
+        : targetSets > 0 && completedSets > 0
+        ? Math.min(100, Math.round((completedSets / targetSets) * 100))
+        : 0;
+
+    return {
+      id: item.id || `pex-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
+      exerciseId: resolvedEx.id,
+      exercise: resolvedEx,
+      targetSets,
+      targetReps,
+      completedSets,
+      completedReps,
+      completionPercentage,
+      holdSeconds: item.holdSeconds ?? null,
+      restSeconds: item.restSeconds ?? null,
+      notes: item.notes ?? null,
+      orderIndex: item.orderIndex ?? baseOrder + idx,
+      addedAt: item.addedAt || new Date().toISOString(),
+    };
+  });
+
+  const updatedList = [...currentList, ...newEntries];
+  saveLiveCase({ id: caseId, assignedExercises: updatedList, _baseSnapshot: baseSnapshot });
+  await persistMemoryCasesAsync();
+  return updatedList;
+}
+
+export async function updateCaseExercisesAsync(
+  caseId: string,
+  payload: {
+    exerciseItemId?: string;
+    updates?: Partial<PatientAssignedExercise>;
+    assignedExercises?: PatientAssignedExercise[];
+  },
+  baseSnapshot?: Partial<LiveCase>
+): Promise<PatientAssignedExercise[]> {
+  await getLiveCasesAsync();
+  let existingCase = memoryCases.find((c) => c.id === caseId);
+  if (!existingCase) {
+    existingCase = saveLiveCase({ id: caseId, _baseSnapshot: baseSnapshot });
+  }
+
+  let updatedList: PatientAssignedExercise[] = [...(existingCase.assignedExercises || [])];
+
+  if (Array.isArray(payload.assignedExercises)) {
+    updatedList = payload.assignedExercises;
+  } else if (payload.exerciseItemId && payload.updates) {
+    updatedList = updatedList.map((item) => {
+      if (item.id !== payload.exerciseItemId) return item;
+      const merged = { ...item, ...payload.updates };
+      if (merged.completionPercentage !== undefined) {
+        merged.completionPercentage = Math.min(100, Math.max(0, Math.round(Number(merged.completionPercentage))));
+      }
+      return merged;
+    });
+  }
+
+  saveLiveCase({ id: caseId, assignedExercises: updatedList, _baseSnapshot: baseSnapshot });
+  await persistMemoryCasesAsync();
+  return updatedList;
+}
+
+export async function deleteCaseExerciseAsync(
+  caseId: string,
+  exerciseItemId: string,
+  baseSnapshot?: Partial<LiveCase>
+): Promise<PatientAssignedExercise[]> {
+  await getLiveCasesAsync();
+  let existingCase = memoryCases.find((c) => c.id === caseId);
+  if (!existingCase) {
+    existingCase = saveLiveCase({ id: caseId, _baseSnapshot: baseSnapshot });
+  }
+
+  const updatedList = (existingCase.assignedExercises || []).filter((item) => item.id !== exerciseItemId);
+  const updatedPrograms = (existingCase.rehabPrograms || []).map((prog) =>
+    Array.isArray(prog.programExercises)
+      ? {
+          ...prog,
+          programExercises: prog.programExercises.filter((pe: any) => pe.id !== exerciseItemId),
+        }
+      : prog
+  );
+
+  saveLiveCase({
+    id: caseId,
+    assignedExercises: updatedList,
+    rehabPrograms: updatedPrograms,
+    _baseSnapshot: baseSnapshot,
+  });
+  await persistMemoryCasesAsync();
+  return updatedList;
+}
+
+export async function getCaseSessionsAsync(caseId: string): Promise<PatientRehabSession[]> {
+  await getLiveCasesAsync();
+  const c = memoryCases.find((item) => item.id === caseId);
+  const sessions = [...(c?.sessions || [])];
+  sessions.sort((a, b) => (a.sessionNumber || 0) - (b.sessionNumber || 0));
+  return sessions;
+}
+
+export async function saveCaseSessionAsync(
+  caseId: string,
+  sessionData: Partial<PatientRehabSession>,
+  baseSnapshot?: Partial<LiveCase>
+): Promise<{ session: PatientRehabSession; sessions: PatientRehabSession[] }> {
+  await getLiveCasesAsync();
+  let existingCase = memoryCases.find((c) => c.id === caseId);
+  if (!existingCase) {
+    existingCase = saveLiveCase({ id: caseId, _baseSnapshot: baseSnapshot });
+  }
+
+  const existingSessions = [...(existingCase.sessions || [])];
+  const existingIdx = sessionData.id
+    ? existingSessions.findIndex((s) => s.id === sessionData.id)
+    : -1;
+
+  const maxNumber = existingSessions.reduce((max, s) => Math.max(max, s.sessionNumber || 0), 0);
+  const sessionNumber =
+    sessionData.sessionNumber ||
+    (existingIdx >= 0 ? existingSessions[existingIdx].sessionNumber : maxNumber + 1);
+
+  const normalizedExercises: SessionExerciseEntry[] = (sessionData.exercises || []).map((ex, idx) => ({
+    id: ex.id || `sex-${Date.now()}-${idx}`,
+    exerciseId: ex.exerciseId,
+    nameAr: ex.nameAr || "تمرين تأهيلي",
+    nameEn: ex.nameEn || "",
+    category: ex.category || "تأهيل",
+    sets: Math.max(1, Number(ex.sets) || 3),
+    reps: Math.max(1, Number(ex.reps) || 10),
+    completionPercentage: Math.min(100, Math.max(0, Math.round(Number(ex.completionPercentage ?? 0)))),
+    notes: ex.notes ?? null,
+  }));
+
+  const overallCompletion =
+    normalizedExercises.length > 0
+      ? Math.round(
+          normalizedExercises.reduce((acc, ex) => acc + ex.completionPercentage, 0) /
+            normalizedExercises.length
+        )
+      : sessionData.overallCompletion ?? 100;
+
+  const completeSession: PatientRehabSession = {
+    id: sessionData.id || `sess-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    sessionNumber,
+    date: sessionData.date || new Date().toISOString().split("T")[0],
+    title: sessionData.title?.trim() || `جلسة تأهيل #${sessionNumber}`,
+    phase: sessionData.phase || existingCase.rehabPrograms?.[0]?.phase || "ACUTE",
+    durationMinutes:
+      sessionData.durationMinutes !== undefined && sessionData.durationMinutes !== null
+        ? Number(sessionData.durationMinutes)
+        : 45,
+    painLevel:
+      sessionData.painLevel !== undefined && sessionData.painLevel !== null
+        ? Number(sessionData.painLevel)
+        : null,
+    overallCompletion,
+    exercises: normalizedExercises,
+    notes: sessionData.notes ?? null,
+    extraDetails: sessionData.extraDetails ?? null,
+    createdAt:
+      existingIdx >= 0
+        ? existingSessions[existingIdx].createdAt
+        : sessionData.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  if (existingIdx >= 0) {
+    existingSessions[existingIdx] = completeSession;
+  } else {
+    existingSessions.push(completeSession);
+  }
+
+  existingSessions.sort((a, b) => (a.sessionNumber || 0) - (b.sessionNumber || 0));
+
+  saveLiveCase({ id: caseId, sessions: existingSessions, _baseSnapshot: baseSnapshot });
+  await persistMemoryCasesAsync();
+
+  return { session: completeSession, sessions: existingSessions };
+}
+
+export async function deleteCaseSessionAsync(
+  caseId: string,
+  sessionId: string,
+  baseSnapshot?: Partial<LiveCase>
+): Promise<PatientRehabSession[]> {
+  await getLiveCasesAsync();
+  let existingCase = memoryCases.find((c) => c.id === caseId);
+  if (!existingCase) {
+    existingCase = saveLiveCase({ id: caseId, _baseSnapshot: baseSnapshot });
+  }
+
+  const remaining = (existingCase.sessions || []).filter((s) => s.id !== sessionId);
+  saveLiveCase({ id: caseId, sessions: remaining, _baseSnapshot: baseSnapshot });
+  await persistMemoryCasesAsync();
+  return remaining;
 }
 
 export async function deleteLiveCaseAsync(id: string): Promise<boolean> {
@@ -828,7 +1193,7 @@ export interface LiveVideoAnalysis {
     nameAr: string;
     nameEn: string;
     percentage: number;
-    role: "primary" | "secondary";
+    role: "primary" | "secondary" | "stabilizer";
   }>;
   summaryNotes?: string | null;
   poseResults?: any;

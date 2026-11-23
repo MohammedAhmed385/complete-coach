@@ -48,12 +48,19 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 
 import { cn, getRegionLabel, truncate, generateWhatsAppShareLink } from "@/lib/utils";
 import { useAuth } from "@/lib/auth-context";
 import { AdminGuard } from "@/components/auth/AdminGuard";
+import {
+  fetchMergedCases,
+  upsertLocalCase,
+  getDeletedExerciseIds,
+  markExerciseDeletedLocal,
+} from "@/lib/client-sync";
 
 // --- TYPES ---
 export type ExerciseRegion = "UPPER" | "LOWER" | "CORE" | "FULL_BODY";
@@ -164,12 +171,17 @@ function ExercisesContent() {
   const [selectedPatientId, setSelectedPatientId] = useState<string>("");
   const [prescriptionSets, setPrescriptionSets] = useState<number>(3);
   const [prescriptionReps, setPrescriptionReps] = useState<number>(10);
+  const [prescriptionCompletion, setPrescriptionCompletion] = useState<number>(0);
   const [prescriptionHoldSec, setPrescriptionHoldSec] = useState<string>("5");
   const [prescriptionRestSec, setPrescriptionRestSec] = useState<string>("60");
   const [prescriptionNotes, setPrescriptionNotes] = useState<string>("");
   const [isPrescribing, setIsPrescribing] = useState<boolean>(false);
   const [prescribeSuccessMessage, setPrescribeSuccessMessage] = useState<string | null>(null);
   const [prescribeError, setPrescribeError] = useState<string | null>(null);
+
+  // --- STATE: Multi-Select Exercises for Batch Assignment ---
+  const [multiSelectedIds, setMultiSelectedIds] = useState<string[]>([]);
+  const [prescribedBatch, setPrescribedBatch] = useState<Exercise[]>([]);
 
   // --- STATE: Delete Exercise ---
   const [exerciseToDelete, setExerciseToDelete] = useState<Exercise | null>(null);
@@ -187,7 +199,9 @@ function ExercisesContent() {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || "فشل حذف التمرين");
       }
+      markExerciseDeletedLocal(exerciseToDelete.id);
       setExercises((prev) => prev.filter((e) => e.id !== exerciseToDelete.id));
+      setMultiSelectedIds((prev) => prev.filter((id) => id !== exerciseToDelete.id));
       if (typeof window !== "undefined") {
         try {
           const localCustom = JSON.parse(localStorage.getItem("revive_custom_exercises") || "[]");
@@ -247,9 +261,10 @@ function ExercisesContent() {
         } catch {}
       }
 
+      const deletedSet = new Set(getDeletedExerciseIds());
       const map = new Map<string, Exercise>();
       [...localCustom, ...serverList].forEach((ex) => {
-        if (ex && ex.id) map.set(ex.id, ex);
+        if (ex && ex.id && !deletedSet.has(ex.id)) map.set(ex.id, ex);
       });
 
       setExercises(Array.from(map.values()));
@@ -270,13 +285,10 @@ function ExercisesContent() {
   const fetchPatients = async () => {
     setIsLoadingPatients(true);
     try {
-      const res = await fetch("/api/cases");
-      if (res.ok) {
-        const data: Patient[] = await res.json();
-        setPatients(data);
-        if (data.length > 0 && !selectedPatientId) {
-          setSelectedPatientId(data[0].id);
-        }
+      const data: Patient[] = await fetchMergedCases();
+      setPatients(data);
+      if (data.length > 0 && !selectedPatientId) {
+        setSelectedPatientId(data[0].id);
       }
     } catch (err) {
       console.error("Error fetching patients:", err);
@@ -423,14 +435,39 @@ function ExercisesContent() {
     }
   };
 
-  // --- ACTION: PRESCRIBE EXERCISE TO PATIENT ---
+  // --- ACTION: PRESCRIBE EXERCISE(S) TO PATIENT ---
+  const handleToggleMultiSelect = (exerciseId: string) => {
+    setMultiSelectedIds((prev) =>
+      prev.includes(exerciseId) ? prev.filter((id) => id !== exerciseId) : [...prev, exerciseId]
+    );
+  };
+
   const handleOpenAddToPatient = (exercise: Exercise) => {
     setActiveExercise(exercise);
+    setPrescribedBatch([exercise]);
     setPrescribeSuccessMessage(null);
     setPrescribeError(null);
     setPrescriptionSets(3);
     setPrescriptionReps(10);
+    setPrescriptionCompletion(0);
     setPrescriptionHoldSec(exercise.isIsometric ? "10" : "0");
+    setPrescriptionRestSec("60");
+    setPrescriptionNotes("");
+    setIsAddToPatientDialogOpen(true);
+    fetchPatients();
+  };
+
+  const handleOpenBatchAddToPatient = () => {
+    const selectedItems = exercises.filter((ex) => multiSelectedIds.includes(ex.id));
+    if (selectedItems.length === 0) return;
+    setActiveExercise(selectedItems[0]);
+    setPrescribedBatch(selectedItems);
+    setPrescribeSuccessMessage(null);
+    setPrescribeError(null);
+    setPrescriptionSets(3);
+    setPrescriptionReps(10);
+    setPrescriptionCompletion(0);
+    setPrescriptionHoldSec("0");
     setPrescriptionRestSec("60");
     setPrescriptionNotes("");
     setIsAddToPatientDialogOpen(true);
@@ -439,8 +476,9 @@ function ExercisesContent() {
 
   const handlePrescribeSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedPatientId || !activeExercise) {
-      setPrescribeError("يرجى اختيار مريض أولاً");
+    const targetList = prescribedBatch.length > 0 ? prescribedBatch : activeExercise ? [activeExercise] : [];
+    if (!selectedPatientId || targetList.length === 0) {
+      setPrescribeError("يرجى اختيار مريض وتمرين واحد على الأقل أولاً");
       return;
     }
 
@@ -449,16 +487,27 @@ function ExercisesContent() {
     setPrescribeSuccessMessage(null);
 
     try {
+      const targetPatient = patients.find((p) => p.id === selectedPatientId) as any;
+      const payloadItems = targetList.map((ex, idx) => ({
+        id: `pex-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 5)}`,
+        exerciseId: ex.id,
+        exercise: ex,
+        targetSets: Number(prescriptionSets) || 3,
+        targetReps: Number(prescriptionReps) || 10,
+        completedSets: 0,
+        completedReps: 0,
+        completionPercentage: Math.min(100, Math.max(0, Number(prescriptionCompletion) || 0)),
+        holdSeconds: prescriptionHoldSec ? parseInt(prescriptionHoldSec, 10) : null,
+        restSeconds: prescriptionRestSec ? parseInt(prescriptionRestSec, 10) : null,
+        notes: prescriptionNotes.trim() || null,
+      }));
+
       const res = await fetch(`/api/cases/${selectedPatientId}/exercises`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          exerciseId: activeExercise.id,
-          sets: prescriptionSets,
-          reps: prescriptionReps,
-          holdSeconds: prescriptionHoldSec ? parseInt(prescriptionHoldSec, 10) : null,
-          restSeconds: prescriptionRestSec ? parseInt(prescriptionRestSec, 10) : null,
-          notes: prescriptionNotes.trim() || null,
+          exercises: payloadItems,
+          _baseSnapshot: targetPatient,
         }),
       });
 
@@ -466,11 +515,31 @@ function ExercisesContent() {
         throw new Error("فشل في إضافة التمرين لبرنامج المريض");
       }
 
-      setPrescribeSuccessMessage("تمت إضافة التمرين إلى برنامج المريض بنجاح!");
+      const responseData = await res.json().catch(() => null);
+      if (targetPatient) {
+        const existingEx = Array.isArray(targetPatient.assignedExercises)
+          ? targetPatient.assignedExercises
+          : [];
+        const updatedAssigned = Array.isArray(responseData?.exercises)
+          ? responseData.exercises
+          : [...existingEx, ...payloadItems];
+        upsertLocalCase({
+          ...targetPatient,
+          assignedExercises: updatedAssigned,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+
+      setPrescribeSuccessMessage(
+        targetList.length > 1
+          ? `تمت إضافة ${targetList.length} تمارين إلى ملف المريض بنجاح!`
+          : "تمت إضافة التمرين إلى ملف المريض بنجاح!"
+      );
+      setMultiSelectedIds([]);
       setTimeout(() => {
         setIsAddToPatientDialogOpen(false);
         setPrescribeSuccessMessage(null);
-      }, 1500);
+      }, 1400);
     } catch (err: unknown) {
       console.error("Prescribe error:", err);
       setPrescribeError(err instanceof Error ? err.message : "حدث خطأ أثناء الإضافة");
@@ -479,14 +548,14 @@ function ExercisesContent() {
     }
   };
 
-  // --- ACTION: SEND VIA WHATSAPP ---
+  // --- ACTION: SEND VIA WHATSAPP (عيادة Revive) ---
   const handleShareWhatsApp = (exercise: Exercise) => {
     const regionInfo = getRegionLabel(exercise.region);
     const youtubeLink = exercise.youtubeSearch
       ? `https://www.youtube.com/results?search_query=${encodeURIComponent(exercise.youtubeSearch)}`
       : `https://www.youtube.com/results?search_query=${encodeURIComponent(exercise.nameEn + " physical therapy exercise")}`;
 
-    const text = `🏥 *Peak Motion — بطاقة تمرين تأهيلي*
+    const text = `🏥 *عيادة Revive — بطاقة تمرين تأهيلي*
 ────────────────────
 📌 *اسم التمرين:* ${exercise.nameAr}
 🔤 *الاسم بالإنجليزية:* ${exercise.nameEn}
@@ -506,7 +575,7 @@ ${exercise.instructions || "يرجى اتباع الجرعة والتعليما�
 🎥 *رابط توضيحي على يوتيوب:*
 ${youtubeLink}
 ────────────────────
-عيادة Peak Motion للعلاج الطبيعي والتأهيل الحركي`;
+عيادة Revive للعلاج الطبيعي والتأهيل الحركي`;
 
     const shareUrl = generateWhatsAppShareLink(text);
     window.open(shareUrl, "_blank", "noopener,noreferrer");
@@ -810,6 +879,36 @@ ${youtubeLink}
           </div>
         )}
 
+        {/* BATCH MULTI-SELECT ACTION BAR */}
+        {multiSelectedIds.length > 0 && (
+          <div className="mb-5 p-3.5 rounded-xl bg-emerald-50 border border-emerald-300 flex flex-wrap items-center justify-between gap-3 shadow-xs">
+            <div className="flex items-center gap-2 text-xs sm:text-sm font-bold text-emerald-950">
+              <Check className="w-4 h-4 text-emerald-600" />
+              <span>تم تحديد {multiSelectedIds.length} تمرين للإضافة معاً لملف المريض</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setMultiSelectedIds([])}
+                className="text-xs border-slate-300 bg-white"
+              >
+                إلغاء التحديد
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={handleOpenBatchAddToPatient}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold gap-1.5"
+              >
+                <UserPlus className="w-4 h-4" />
+                <span>إضافة ({multiSelectedIds.length}) تمارين لمريض</span>
+              </Button>
+            </div>
+          </div>
+        )}
+
         {/* LOADING SKELETONS */}
         {isLoading ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -893,18 +992,30 @@ ${youtubeLink}
                       <div className="absolute inset-0 opacity-10 bg-[radial-gradient(#fff_1px,transparent_1px)] [background-size:16px_16px]" />
                       <div className="absolute -end-10 -bottom-10 w-36 h-36 rounded-full bg-white/5 blur-xl pointer-events-none" />
 
-                      {/* Top Badges over diagram */}
+                      {/* Top Badges over diagram + Multi-select Checkbox */}
                       <div className="relative z-10 flex items-center justify-between gap-2">
-                        {/* Region Badge */}
-                        <span
-                          className={cn(
-                            "inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border backdrop-blur-md",
-                            theme.badgeColor
-                          )}
-                        >
-                          <RegionIcon className="w-3.5 h-3.5" />
-                          <span>{regionMeta.ar}</span>
-                        </span>
+                        <div className="flex items-center gap-2">
+                          <label
+                            onClick={(e) => e.stopPropagation()}
+                            className="inline-flex items-center justify-center bg-white/95 rounded-md p-1 shadow-sm cursor-pointer"
+                            title="تحديد لإضافة مجموعة تمارين لمريض"
+                          >
+                            <Checkbox
+                              checked={multiSelectedIds.includes(exercise.id)}
+                              onCheckedChange={() => handleToggleMultiSelect(exercise.id)}
+                            />
+                          </label>
+                          {/* Region Badge */}
+                          <span
+                            className={cn(
+                              "inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border backdrop-blur-md",
+                              theme.badgeColor
+                            )}
+                          >
+                            <RegionIcon className="w-3.5 h-3.5" />
+                            <span>{regionMeta.ar}</span>
+                          </span>
+                        </div>
 
                         {/* Isometric Angle Badge */}
                         {exercise.isIsometric && (
@@ -1491,7 +1602,20 @@ ${youtubeLink}
           </DialogHeader>
 
           {/* Exercise quick banner */}
-          {activeExercise && (
+          {prescribedBatch.length > 1 ? (
+            <div className="p-3 rounded-xl bg-emerald-50/70 border border-emerald-200 space-y-1.5">
+              <span className="text-xs font-bold text-emerald-900 block">
+                سيتم إضافة {prescribedBatch.length} تمارين لملف المريض:
+              </span>
+              <div className="flex flex-wrap gap-1.5">
+                {prescribedBatch.map((ex) => (
+                  <Badge key={ex.id} variant="secondary" className="text-[11px] bg-white border-emerald-200">
+                    {ex.nameAr}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          ) : activeExercise ? (
             <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/90 flex items-center justify-between">
               <div>
                 <h4 className="font-bold text-sm text-slate-900">
@@ -1514,7 +1638,7 @@ ${youtubeLink}
                 )}
               </div>
             </div>
-          )}
+          ) : null}
 
           {/* Messages */}
           {prescribeSuccessMessage && (
@@ -1562,7 +1686,7 @@ ${youtubeLink}
             </div>
 
             {/* Prescription parameters */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
               <div className="space-y-1">
                 <Label htmlFor="sets" className="text-xs font-bold">
                   المجموعات (Sets)
@@ -1592,6 +1716,25 @@ ${youtubeLink}
                   onChange={(e) => setPrescriptionReps(Number(e.target.value))}
                   className="text-center font-bold text-sm"
                   required
+                />
+              </div>
+
+              <div className="space-y-1">
+                <Label htmlFor="completionPct" className="text-xs font-bold">
+                  الإنجاز (%)
+                </Label>
+                <Input
+                  id="completionPct"
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={prescriptionCompletion}
+                  onChange={(e) =>
+                    setPrescriptionCompletion(
+                      Math.min(100, Math.max(0, Number(e.target.value) || 0))
+                    )
+                  }
+                  className="text-center font-bold text-sm text-emerald-700"
                 />
               </div>
 

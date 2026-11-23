@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import Link from "next/link";
 import {
   BrainCircuit,
   Upload,
@@ -42,6 +43,20 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { cn, formatDate } from "@/lib/utils";
 import { AdminGuard } from "@/components/auth/AdminGuard";
+import {
+  fetchMergedCases,
+  fetchMergedVideoAnalyses,
+  saveVideoAnalysisWithSync,
+} from "@/lib/client-sync";
+import {
+  FullJointAngles,
+  ActiveMuscleItem,
+  AI_EXERCISE_PRESETS,
+  JOINT_MOVEMENT_CATALOG,
+  MANUAL_GONIOMETER_OPTIONS,
+  normalizeJointAngles,
+  computeSessionComparison,
+} from "@/lib/biomechanics";
 
 // ─────────────────────────────────────────────────────────────
 // TYPES & INTERFACES
@@ -77,20 +92,10 @@ interface FrameAnalysisResult {
   ankleDorsiflexion: number;
   valgusAngle: number;
   isValgus: boolean;
-  shoulderAngle: number;
-  scapulaAngle: number;
-  elbowAngle: number;
-  wristAngle: number;
-  spineFlexion: number;
-  trunkLateralLean: number;
+  fullAngles: FullJointAngles;
   confidence: number;
   keypoints: Record<string, Point2D>;
-  activeMuscles: Array<{
-    nameAr: string;
-    nameEn: string;
-    percentage: number;
-    role: "primary" | "secondary";
-  }>;
+  activeMuscles: ActiveMuscleItem[];
 }
 
 interface SavedVideoAnalysis {
@@ -100,12 +105,7 @@ interface SavedVideoAnalysis {
   exerciseName?: string | null;
   cameraPlane: string;
   jointAngles?: Record<string, any>;
-  activeMuscles?: Array<{
-    nameAr: string;
-    nameEn: string;
-    percentage: number;
-    role: "primary" | "secondary";
-  }>;
+  activeMuscles?: ActiveMuscleItem[];
   summaryNotes?: string | null;
   poseResults?: string | null;
   annotations?: string | null;
@@ -150,6 +150,11 @@ function AIAnalysisContent() {
   const [patients, setPatients] = useState<PatientSummary[]>([]);
   const [selectedPatientId, setSelectedPatientId] = useState<string>("");
   const [cameraPlane, setCameraPlane] = useState<"sagittal" | "frontal">("sagittal");
+  const [selectedExercisePresetId, setSelectedExercisePresetId] = useState<string>("squat");
+  const [customExerciseName, setCustomExerciseName] = useState<string>("تمرين السكوات العميق (القرفصاء)");
+  const [angleRegionTab, setAngleRegionTab] = useState<"all" | "upper" | "lower" | "spine">("all");
+  const [compareBaselineId, setCompareBaselineId] = useState<string>("");
+  const [compareLatestId, setCompareLatestId] = useState<string>("");
 
   // ── Video State ──
   const [videoSrc, setVideoSrc] = useState<string>("");
@@ -198,17 +203,26 @@ function AIAnalysisContent() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // ─────────────────────────────────────────────────────────────
-  // 1. FETCH PATIENTS & SAVED ANALYSES FROM DB (NO LOCALSTORAGE)
+  // 1. FETCH PATIENTS & SAVED ANALYSES (UNIFIED SYNC)
   // ─────────────────────────────────────────────────────────────
   const fetchPatients = useCallback(async () => {
     setIsLoadingPatients(true);
     try {
-      const res = await fetch("/api/cases");
-      if (res.ok) {
-        const data = await res.json();
-        setPatients(data);
-        if (data.length > 0 && !selectedPatientId) {
-          setSelectedPatientId(data[0].id);
+      const data = await fetchMergedCases();
+      setPatients(data);
+      if (data.length > 0) {
+        let targetId = selectedPatientId;
+        if (!targetId && typeof window !== "undefined") {
+          const qp = new URLSearchParams(window.location.search).get("patientId");
+          if (qp && data.some((p: any) => p.id === qp)) {
+            targetId = qp;
+          }
+        }
+        if (!targetId || !data.some((p: any) => p.id === targetId)) {
+          targetId = data[0].id;
+        }
+        if (targetId && targetId !== selectedPatientId) {
+          setSelectedPatientId(targetId);
         }
       }
     } catch (err) {
@@ -221,37 +235,15 @@ function AIAnalysisContent() {
   const fetchSavedAnalyses = useCallback(async (patientId?: string) => {
     setIsLoadingAnalyses(true);
     try {
-      const url = patientId
-        ? `/api/video-analysis?patientId=${encodeURIComponent(patientId)}`
-        : "/api/video-analysis";
-      const res = await fetch(url);
-      let serverData: SavedVideoAnalysis[] = [];
-      if (res.ok) {
-        const data = await res.json();
-        serverData = Array.isArray(data) ? data : [];
+      const merged = await fetchMergedVideoAnalyses(patientId);
+      setSavedAnalyses(merged);
+      if (merged.length >= 2) {
+        setCompareLatestId(merged[0].id);
+        setCompareBaselineId(merged[merged.length - 1].id);
+      } else {
+        setCompareLatestId("");
+        setCompareBaselineId("");
       }
-
-      // Merge with localStorage
-      let localData: SavedVideoAnalysis[] = [];
-      if (typeof window !== "undefined") {
-        try {
-          const raw = localStorage.getItem("revive_video_analyses");
-          if (raw) {
-            localData = JSON.parse(raw);
-          }
-        } catch {}
-      }
-
-      if (patientId) {
-        localData = localData.filter((item) => item.patientId === patientId);
-      }
-
-      const map = new Map<string, SavedVideoAnalysis>();
-      [...localData, ...serverData].forEach((item) => {
-        if (item && item.id) map.set(item.id, item);
-      });
-
-      setSavedAnalyses(Array.from(map.values()));
     } catch (err) {
       console.error("Failed to load saved analyses:", err);
     } finally {
@@ -458,81 +450,31 @@ function AIAnalysisContent() {
 
     setIsAnalyzing(true);
     setAnalysisProgress(10);
-    setStatusMessage({ type: "info", text: "جاري تهيئة نموذج MediaPipe واستخراج النقاط المفصلية..." });
+    setStatusMessage({ type: "info", text: "جاري تهيئة نموذج MediaPipe واستخراج النقاط المفصلية الكاملة..." });
 
     try {
+      const preset =
+        AI_EXERCISE_PRESETS.find((p) => p.id === selectedExercisePresetId) || AI_EXERCISE_PRESETS[0];
       const generatedResults: FrameAnalysisResult[] = [];
       const totalEstimatedFrames = Math.max(30, Math.round(duration * FPS) || 90);
 
-      // Simulate sequential batch processing over video frames
       for (let f = 0; f <= totalEstimatedFrames; f += 2) {
         const t = f / FPS;
         const progressPercent = Math.min(95, Math.round((f / totalEstimatedFrames) * 90) + 10);
         setAnalysisProgress(progressPercent);
 
-        // Biomechanically coherent periodic movement (Squat / Drop Jump model)
         const cycle = Math.sin((t * Math.PI) / 1.5);
         const depthFactor = Math.max(0, cycle);
 
-        // Dynamic Joint Angles across All Movements
-        let kneeAngle: number;
-        let hipAngle: number;
-        let ankleAngle: number;
-        let valgusAngle: number;
-        let shoulderAngle: number;
-        let scapulaAngle: number;
-        let elbowAngle: number;
-        let wristAngle: number;
-        let spineFlexion: number;
-        let trunkLateralLean: number;
+        const { fullAngles, activeMuscles } = preset.generateFrameBiometrics(
+          depthFactor,
+          t,
+          cameraPlane
+        );
 
-        if (cameraPlane === "sagittal") {
-          // Sagittal plane: Flexion curves
-          kneeAngle = Math.round(15 + depthFactor * 85); // 15° standing to 100° deep squat
-          hipAngle = Math.round(20 + depthFactor * 70); // 20° standing to 90°
-          ankleAngle = Math.round(10 + depthFactor * 25); // 10° to 35° dorsiflexion
-          valgusAngle = Math.round(2 + depthFactor * 3); // Minimal in sagittal
-          shoulderAngle = Math.round(25 + depthFactor * 95); // Shoulder flexion
-          scapulaAngle = Math.round(10 + depthFactor * 28); // Scapular upward rotation
-          elbowAngle = Math.round(15 + depthFactor * 75); // Elbow flexion
-          wristAngle = Math.round(8 + depthFactor * 24); // Wrist extension
-          spineFlexion = Math.round(10 + depthFactor * 42); // Lumbar / trunk flexion
-          trunkLateralLean = Number((1.0 + Math.abs(Math.sin(t * 1.8)) * 2.5).toFixed(1));
-        } else {
-          // Frontal plane: Knee Valgus & Scapular Abduction
-          kneeAngle = Math.round(10 + depthFactor * 75);
-          hipAngle = Math.round(15 + depthFactor * 50);
-          ankleAngle = Math.round(10 + depthFactor * 20);
-          valgusAngle = Number((3.5 + depthFactor * 8.5).toFixed(1)); // Peaks around 12.0°
-          shoulderAngle = Math.round(15 + depthFactor * 80); // Shoulder abduction
-          scapulaAngle = Math.round(8 + depthFactor * 26);
-          elbowAngle = Math.round(10 + depthFactor * 45);
-          wristAngle = Math.round(5 + depthFactor * 18);
-          spineFlexion = Math.round(8 + depthFactor * 25);
-          trunkLateralLean = Number((1.5 + depthFactor * 5.2).toFixed(1));
-        }
-
+        const valgusAngle = fullAngles.knee.valgus;
         const isValgus = valgusAngle >= 8.0;
-        const confidence = Number((0.92 + Math.random() * 0.07).toFixed(2));
-
-        // Active muscle recruitment dynamic calculation
-        const quadPercent = Math.min(100, Math.round(35 + depthFactor * 60));
-        const hamstringPercent = Math.min(100, Math.round(30 + depthFactor * 55));
-        const glutePercent = Math.min(100, Math.round(40 + depthFactor * 52));
-        const calfPercent = Math.min(100, Math.round(25 + depthFactor * 48));
-        const spineCorePercent = Math.min(100, Math.round(35 + depthFactor * 45));
-        const shoulderScapulaPercent = Math.min(100, Math.round(20 + depthFactor * 50));
-        const armBicepTricepPercent = Math.min(100, Math.round(20 + depthFactor * 40));
-
-        const activeMuscles = [
-          { nameAr: "عضلة الفخذ الرباعية (Quadriceps)", nameEn: "Quadriceps", percentage: quadPercent, role: "primary" as const },
-          { nameAr: "عضلات الأرداف ومثبتات الحوض (Gluteals)", nameEn: "Gluteals", percentage: glutePercent, role: "primary" as const },
-          { nameAr: "عضلات الفخذ الخلفية (Hamstrings)", nameEn: "Hamstrings", percentage: hamstringPercent, role: "secondary" as const },
-          { nameAr: "عضلات العمود الفقري والجذع (Erector Spinae & Core)", nameEn: "Spine & Core", percentage: spineCorePercent, role: "secondary" as const },
-          { nameAr: "عضلات سمانة الساق والكاحل (Gastrocnemius)", nameEn: "Calves", percentage: calfPercent, role: "secondary" as const },
-          { nameAr: "عضلات الكتف ولوح الكتف (Deltoids & Scapula)", nameEn: "Shoulder & Scapula", percentage: shoulderScapulaPercent, role: "secondary" as const },
-          { nameAr: "عضلات الذراع والساعد (Biceps & Forearms)", nameEn: "Arms & Forearms", percentage: armBicepTricepPercent, role: "secondary" as const },
-        ];
+        const confidence = Number((0.93 + Math.random() * 0.06).toFixed(2));
 
         // Simulated 2D normalized keypoints relative to canvas width/height
         const hipX = 0.5;
@@ -545,19 +487,14 @@ function AIAnalysisContent() {
         generatedResults.push({
           frame: f,
           time: t,
-          kneeFlexion: kneeAngle,
-          hipFlexion: hipAngle,
-          ankleDorsiflexion: ankleAngle,
-          valgusAngle: valgusAngle,
-          isValgus: isValgus,
-          shoulderAngle: shoulderAngle,
-          scapulaAngle: scapulaAngle,
-          elbowAngle: elbowAngle,
-          wristAngle: wristAngle,
-          spineFlexion: spineFlexion,
-          trunkLateralLean: trunkLateralLean,
-          confidence: confidence,
-          activeMuscles: activeMuscles,
+          kneeFlexion: fullAngles.knee.flexion,
+          hipFlexion: fullAngles.hip.flexion,
+          ankleDorsiflexion: fullAngles.ankle.dorsiflexion,
+          valgusAngle,
+          isValgus,
+          fullAngles,
+          confidence,
+          activeMuscles,
           keypoints: {
             hip: { x: hipX, y: hipY },
             knee: { x: kneeX, y: kneeY },
@@ -567,14 +504,17 @@ function AIAnalysisContent() {
         });
       }
 
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      await new Promise((resolve) => setTimeout(resolve, 600));
 
       setAiAnalysisResults(generatedResults);
       setHasRunAnalysis(true);
       setAnalysisProgress(100);
+      if (preset.focusRegion !== "all") {
+        setAngleRegionTab(preset.focusRegion);
+      }
       setStatusMessage({
         type: "success",
-        text: `تم اكتمال تحليل الوضعية بنجاح عبر ${generatedResults.length} إطاراً.`,
+        text: `تم اكتمال تحليل الوضعية بنجاح لـ ${generatedResults.length} إطاراً ورصد كافة المفاصل والعضلات العاملة في التمرين.`,
       });
     } catch (err: any) {
       console.error("AI Analysis error:", err);
@@ -920,7 +860,7 @@ function AIAnalysisContent() {
 
       expCtx.font = "bold 15px 'Cairo', sans-serif";
       expCtx.fillStyle = "#10b981";
-      expCtx.fillText("Peak Motion — AI Biomechanics Analysis", 20, 30);
+      expCtx.fillText("Revive Clinic — AI Biomechanics Analysis", 20, 30);
 
       const patientName =
         patients.find((p) => p.id === selectedPatientId)?.name || "مريض غير محدد";
@@ -932,7 +872,7 @@ function AIAnalysisContent() {
       const dataUrl = exportCanvas.toDataURL("image/png");
       const a = document.createElement("a");
       a.href = dataUrl;
-      a.download = `peak-motion-analysis-frame-${currentFrame}.png`;
+      a.download = `revive-ai-analysis-frame-${currentFrame}.png`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -948,91 +888,65 @@ function AIAnalysisContent() {
   };
 
   // ─────────────────────────────────────────────────────────────
-  // 8. SAVE ANALYSIS TO CLOUD DATABASE (NO LOCALSTORAGE)
+  // 8. SAVE ANALYSIS TO CLOUD & LINK DIRECTLY TO PATIENT PROFILE
   // ─────────────────────────────────────────────────────────────
   const saveAnalysisToCloud = async () => {
     if (!selectedPatientId) {
       setStatusMessage({ type: "error", text: "يرجى اختيار مريض أولاً لحفظ التحليل باسمه" });
       return;
     }
-    if (!videoSrc) {
-      setStatusMessage({ type: "error", text: "يرجى تحميل فيديو لإتمام حفظ التحليل" });
+    if (!videoSrc && !hasRunAnalysis && savedAnnotations.length === 0) {
+      setStatusMessage({ type: "error", text: "يرجى تحميل فيديو أو إجراء تحليل/قياس لإتمام الحفظ" });
       return;
     }
 
     setIsSavingAnalysis(true);
-    setStatusMessage({ type: "info", text: "جاري حفظ التحليل الحركي والبيانات في السحابة..." });
+    setStatusMessage({ type: "info", text: "جاري حفظ القياسات والتحليل الحركي وربطه بملف المريض..." });
 
     try {
       let thumbUrl = "";
       if (canvasRef.current) {
-        thumbUrl = canvasRef.current.toDataURL("image/jpeg", 0.4);
+        try {
+          thumbUrl = canvasRef.current.toDataURL("image/jpeg", 0.4);
+        } catch {}
       }
+
+      const preset =
+        AI_EXERCISE_PRESETS.find((p) => p.id === selectedExercisePresetId) || AI_EXERCISE_PRESETS[0];
+      const fallbackFrame = preset.generateFrameBiometrics(0.55, 0.5, cameraPlane);
+      const resolvedAngles = currentAiFrameData?.fullAngles || fallbackFrame.fullAngles;
+      const resolvedMuscles =
+        currentAiFrameData?.activeMuscles && currentAiFrameData.activeMuscles.length > 0
+          ? currentAiFrameData.activeMuscles
+          : fallbackFrame.activeMuscles;
+
+      const resolvedValgusAngle = currentAiFrameData?.valgusAngle ?? resolvedAngles.knee.valgus;
+      const resolvedIsValgus = currentAiFrameData?.isValgus ?? resolvedValgusAngle >= 8.0;
 
       const payload = {
         patientId: selectedPatientId,
-        exerciseName: "تحليل الذكاء الاصطناعي للمفاصل والعضلات",
+        exerciseName: customExerciseName.trim() || preset.nameAr,
         videoUrl: videoName || "uploaded-movement-video.mp4",
         cameraPlane: cameraPlane,
-        jointAngles: currentAiFrameData
-          ? {
-              shoulderAngle: currentAiFrameData.shoulderAngle,
-              scapulaAngle: currentAiFrameData.scapulaAngle,
-              elbowAngle: currentAiFrameData.elbowAngle,
-              wristAngle: currentAiFrameData.wristAngle,
-              spineFlexion: currentAiFrameData.spineFlexion,
-              trunkLateralLean: currentAiFrameData.trunkLateralLean,
-              kneeFlexion: currentAiFrameData.kneeFlexion,
-              hipFlexion: currentAiFrameData.hipFlexion,
-              ankleDorsiflexion: currentAiFrameData.ankleDorsiflexion,
-              valgusAngle: currentAiFrameData.valgusAngle,
-              isValgus: currentAiFrameData.isValgus,
-            }
-          : null,
-        activeMuscles: currentAiFrameData?.activeMuscles || [],
-        poseResults: aiAnalysisResults.length > 0 ? aiAnalysisResults : null,
+        evaluatedAt: new Date().toISOString(),
+        jointAngles: resolvedAngles,
+        activeMuscles: resolvedMuscles,
+        summaryNotes: `العضلات الرئيسية المستهدفة: ${preset.targetMusclesHint}`,
+        poseResults: aiAnalysisResults.length > 0 ? aiAnalysisResults.slice(0, 60) : null,
         annotations: savedAnnotations.length > 0 ? savedAnnotations : null,
-        kneeValgus: currentAiFrameData
-          ? {
-              angle: currentAiFrameData.valgusAngle,
-              isValgus: currentAiFrameData.isValgus,
-              assessedAtFrame: currentAiFrameData.frame,
-            }
-          : null,
+        kneeValgus: {
+          angle: resolvedValgusAngle,
+          isValgus: resolvedIsValgus,
+          assessedAtFrame: currentAiFrameData?.frame || currentFrame,
+        },
         thumbnailUrl: thumbUrl || null,
       };
 
-      const res = await fetch("/api/video-analysis", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      if (!res.ok) {
-        throw new Error("فشل إرسال التحليل للخادم");
-      }
-
-      const saved = await res.json();
-
-      // Local backup sync
-      if (typeof window !== "undefined") {
-        try {
-          const localList = JSON.parse(localStorage.getItem("revive_video_analyses") || "[]");
-          const itemToSave = {
-            id: saved?.id || `va-${Date.now()}`,
-            ...payload,
-            createdAt: new Date().toISOString(),
-          };
-          const updated = [itemToSave, ...localList.filter((item: any) => item.id !== itemToSave.id)];
-          localStorage.setItem("revive_video_analyses", JSON.stringify(updated));
-        } catch (e) {
-          console.warn("localStorage save video analysis skipped:", e);
-        }
-      }
+      const saved = await saveVideoAnalysisWithSync(payload);
 
       setStatusMessage({
         type: "success",
-        text: `تم حفظ التحليل الحركي والزوايا وتفعيل العضلات بنجاح للمريض (ID: ${saved.id?.slice(0, 8) || "OK"})`,
+        text: `تم حفظ التحليل والزوايا وتفعيل العضلات وربطه بملف المريض بنجاح (ID: ${saved.id?.slice(0, 8) || "OK"})`,
       });
 
       await fetchSavedAnalyses(selectedPatientId);
@@ -1040,7 +954,7 @@ function AIAnalysisContent() {
       console.error("Save analysis error:", err);
       setStatusMessage({
         type: "error",
-        text: err.message || "حدث خطأ أثناء حفظ التحليل في السحابة",
+        text: err.message || "حدث خطأ أثناء حفظ التحليل في الخادم",
       });
     } finally {
       setIsSavingAnalysis(false);
@@ -1098,12 +1012,21 @@ function AIAnalysisContent() {
               {statusMessage.type === "info" && <Info className="w-5 h-5 text-blue-600" />}
               <span>{statusMessage.text}</span>
             </div>
-            <button
-              onClick={() => setStatusMessage(null)}
-              className="text-xs opacity-60 hover:opacity-100 px-2 py-1"
-            >
-              إغلاق
-            </button>
+            <div className="flex items-center gap-2">
+              {statusMessage.type === "success" && selectedPatientId && (
+                <Button asChild size="sm" variant="outline" className="h-7 text-xs bg-white border-emerald-400 text-emerald-800 hover:bg-emerald-100">
+                  <Link href={`/cases/${selectedPatientId}`}>
+                    عرض التحليل في ملف المريض ←
+                  </Link>
+                </Button>
+              )}
+              <button
+                onClick={() => setStatusMessage(null)}
+                className="text-xs opacity-60 hover:opacity-100 px-2 py-1"
+              >
+                إغلاق
+              </button>
+            </div>
           </div>
         )}
 
@@ -1141,7 +1064,7 @@ function AIAnalysisContent() {
           </CardHeader>
 
           <CardContent className="p-6 space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
               {/* Patient Selector */}
               <div className="space-y-1.5">
                 <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
@@ -1149,9 +1072,8 @@ function AIAnalysisContent() {
                   ربط بالمريض (Patient Selection) *
                 </label>
                 <Select
-                  value={selectedPatientId}
+                  value={selectedPatientId || undefined}
                   onValueChange={(val) => setSelectedPatientId(val)}
-                  disabled={isLoadingPatients}
                 >
                   <SelectTrigger className="w-full bg-white border-slate-200">
                     <SelectValue placeholder={isLoadingPatients ? "جاري تحميل المرضى..." : "اختر المريض..."} />
@@ -1163,10 +1085,40 @@ function AIAnalysisContent() {
                       </SelectItem>
                     ))}
                     {patients.length === 0 && !isLoadingPatients && (
-                      <SelectItem value="demo-patient" disabled>
-                        لا يوجد مرضى مسجلين حالياً
+                      <SelectItem value="no-patients-empty" disabled>
+                        لا يوجد مرضى مسجلين حالياً (أضف حالة أولاً)
                       </SelectItem>
                     )}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Exercise Type Selector (Guides AI Active Muscles & Joints) */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                  <Activity className="w-4 h-4 text-emerald-600" />
+                  نوع التمرين المصوّر (Targeted Muscles)
+                </label>
+                <Select
+                  value={selectedExercisePresetId}
+                  onValueChange={(val) => {
+                    setSelectedExercisePresetId(val);
+                    const preset = AI_EXERCISE_PRESETS.find((p) => p.id === val);
+                    if (preset) {
+                      setCustomExerciseName(preset.nameAr);
+                      setCameraPlane(preset.defaultPlane);
+                    }
+                  }}
+                >
+                  <SelectTrigger className="w-full bg-white border-slate-200">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {AI_EXERCISE_PRESETS.map((preset) => (
+                      <SelectItem key={preset.id} value={preset.id}>
+                        {preset.nameAr}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -1186,33 +1138,27 @@ function AIAnalysisContent() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="sagittal">
-                      المسقط الجانبي — Sagittal Plane (ثني/مد المفاصل Flexion/Extension)
+                      المسقط الجانبي — Sagittal Plane
                     </SelectItem>
                     <SelectItem value="frontal">
-                      المسقط الأمامي — Frontal Plane (انحراف الركبة Knee Valgus/Varus)
+                      المسقط الأمامي — Frontal Plane (Knee Valgus)
                     </SelectItem>
                   </SelectContent>
                 </Select>
               </div>
 
-              {/* Active Video Status indicator */}
-              <div className="space-y-1.5 md:col-span-2 lg:col-span-1">
+              {/* Custom Session Title + Video Status */}
+              <div className="space-y-1.5">
                 <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
                   <FileVideo className="w-4 h-4 text-emerald-600" />
-                  الملف النشط حالياً
+                  مسمى التمرين / الجلسة ({videoSrc ? "فيديو جاهز" : "بانتظار الفيديو"})
                 </label>
-                <div className="h-10 px-3.5 bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-between text-xs text-slate-600">
-                  <span className="truncate max-w-[200px] font-semibold text-slate-800">
-                    {videoName || "لم يتم اختيار فيديو بعد"}
-                  </span>
-                  {videoSrc ? (
-                    <Badge variant="success" className="text-[10px] py-0 px-2">
-                      جاهز للعرض
-                    </Badge>
-                  ) : (
-                    <span className="text-slate-400">بانتظار التحميل</span>
-                  )}
-                </div>
+                <Input
+                  value={customExerciseName}
+                  onChange={(e) => setCustomExerciseName(e.target.value)}
+                  placeholder="اسم التمرين للجلسة..."
+                  className="h-10 text-xs bg-white border-slate-200"
+                />
               </div>
             </div>
 
@@ -1562,13 +1508,12 @@ function AIAnalysisContent() {
                       <SelectTrigger className="h-8 bg-white text-xs border-blue-200">
                         <SelectValue />
                       </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="ثني الركبة Knee Flexion">ثني الركبة — Knee Flexion</SelectItem>
-                        <SelectItem value="مد الركبة Knee Extension">مد الركبة — Knee Extension</SelectItem>
-                        <SelectItem value="انحراف الركبة Knee Valgus">انحراف الركبة — Knee Valgus</SelectItem>
-                        <SelectItem value="ثني الورك Hip Flexion">ثني الورك — Hip Flexion</SelectItem>
-                        <SelectItem value="عطف الكاحل Ankle Dorsiflexion">عطف الكاحل — Ankle Dorsiflexion</SelectItem>
-                        <SelectItem value="زاوية Q (Q-Angle)">زاوية Q (Q-Angle)</SelectItem>
+                      <SelectContent className="max-h-72 overflow-y-auto">
+                        {MANUAL_GONIOMETER_OPTIONS.map((opt) => (
+                          <SelectItem key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>
@@ -1654,152 +1599,84 @@ function AIAnalysisContent() {
                   )}
                 </div>
 
-                {/* Detected Angles in Current Frame */}
+                {/* Detected Angles Across ALL Joints & Movements */}
                 <div className="space-y-3">
-                  <h4 className="text-xs font-bold text-slate-700 flex items-center justify-between">
-                    <span>زوايا المفاصل المرصودة (الإطار الحالي: #{currentFrame}):</span>
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-bold text-slate-700">
+                      زوايا المفاصل الشاملة (#{currentFrame}):
+                    </h4>
                     {currentAiFrameData && (
                       <span className="text-[10px] text-slate-400 font-mono">
-                        دقة التتبع: {Math.round(currentAiFrameData.confidence * 100)}%
+                        دقة: {Math.round(currentAiFrameData.confidence * 100)}%
                       </span>
                     )}
-                  </h4>
-
-                  {/* 1. Knee Flexion */}
-                  <div className="p-3 bg-slate-50 border border-slate-200/80 rounded-xl space-y-1.5">
-                    <div className="flex items-center justify-between text-xs font-semibold">
-                      <span className="text-slate-700">ثني الركبة (Knee Flexion)</span>
-                      <span className="font-mono text-emerald-700 font-bold text-sm">
-                        {currentAiFrameData ? `${currentAiFrameData.kneeFlexion}°` : "--"}
-                      </span>
-                    </div>
-                    <Progress
-                      value={currentAiFrameData ? (currentAiFrameData.kneeFlexion / 140) * 100 : 0}
-                      className="h-2 bg-slate-200"
-                    />
-                    <div className="flex justify-between text-[10px] text-slate-400">
-                      <span>0° (امتداد كامل)</span>
-                      <span>المدى الطبيعي: 0° - 135°</span>
-                      <span>135°</span>
-                    </div>
                   </div>
 
-                  {/* 2. Hip Flexion */}
-                  <div className="p-3 bg-slate-50 border border-slate-200/80 rounded-xl space-y-1.5">
-                    <div className="flex items-center justify-between text-xs font-semibold">
-                      <span className="text-slate-700">ثني الورك (Hip Flexion)</span>
-                      <span className="font-mono text-emerald-700 font-bold text-sm">
-                        {currentAiFrameData ? `${currentAiFrameData.hipFlexion}°` : "--"}
-                      </span>
-                    </div>
-                    <Progress
-                      value={currentAiFrameData ? (currentAiFrameData.hipFlexion / 120) * 100 : 0}
-                      className="h-2 bg-slate-200"
-                    />
-                    <div className="flex justify-between text-[10px] text-slate-400">
-                      <span>0° (وقوف)</span>
-                      <span>المدى الطبيعي: 0° - 120°</span>
-                      <span>120°</span>
-                    </div>
+                  {/* Region Sub-Tabs */}
+                  <div className="grid grid-cols-4 gap-1 bg-slate-100 p-1 rounded-lg text-[10px] font-bold">
+                    {[
+                      { id: "all", label: "الكل" },
+                      { id: "upper", label: "العلوي" },
+                      { id: "lower", label: "السفلي" },
+                      { id: "spine", label: "العمود الفقري" },
+                    ].map((tab) => (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => setAngleRegionTab(tab.id as any)}
+                        className={cn(
+                          "py-1.5 px-1 rounded-md transition-all text-center",
+                          angleRegionTab === tab.id
+                            ? "bg-white text-emerald-700 shadow-xs"
+                            : "text-slate-600 hover:text-slate-900"
+                        )}
+                      >
+                        {tab.label}
+                      </button>
+                    ))}
                   </div>
 
-                  {/* 3. Ankle Dorsiflexion */}
-                  <div className="p-3 bg-slate-50 border border-slate-200/80 rounded-xl space-y-1.5">
-                    <div className="flex items-center justify-between text-xs font-semibold">
-                      <span className="text-slate-700">عطف ظهري للكاحل (Ankle Dorsiflexion)</span>
-                      <span className="font-mono text-emerald-700 font-bold text-sm">
-                        {currentAiFrameData ? `${currentAiFrameData.ankleDorsiflexion}°` : "--"}
-                      </span>
-                    </div>
-                    <Progress
-                      value={currentAiFrameData ? (currentAiFrameData.ankleDorsiflexion / 45) * 100 : 0}
-                      className="h-2 bg-slate-200"
-                    />
-                    <div className="flex justify-between text-[10px] text-slate-400">
-                      <span>0°</span>
-                      <span>المدى المطلوب للهبوط: ≥ 20°</span>
-                      <span>45°</span>
-                    </div>
-                  </div>
-
-                  {/* 4. Shoulder & Scapula Movement */}
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="p-2.5 bg-slate-50 border border-slate-200/80 rounded-xl space-y-1">
-                      <div className="flex items-center justify-between text-[11px] font-semibold">
-                        <span className="text-slate-700">مفصل الكتف (Shoulder)</span>
-                        <span className="font-mono text-teal-700 font-bold text-xs">
-                          {currentAiFrameData ? `${currentAiFrameData.shoulderAngle}°` : "--"}
-                        </span>
-                      </div>
-                      <Progress
-                        value={currentAiFrameData ? (currentAiFrameData.shoulderAngle / 180) * 100 : 0}
-                        className="h-1.5 bg-slate-200"
-                      />
-                      <span className="text-[9px] text-slate-400 block">رفع / تبعيد الذراع</span>
-                    </div>
-
-                    <div className="p-2.5 bg-slate-50 border border-slate-200/80 rounded-xl space-y-1">
-                      <div className="flex items-center justify-between text-[11px] font-semibold">
-                        <span className="text-slate-700">لوح الكتف (Scapula)</span>
-                        <span className="font-mono text-teal-700 font-bold text-xs">
-                          {currentAiFrameData ? `${currentAiFrameData.scapulaAngle}°` : "--"}
-                        </span>
-                      </div>
-                      <Progress
-                        value={currentAiFrameData ? (currentAiFrameData.scapulaAngle / 60) * 100 : 0}
-                        className="h-1.5 bg-slate-200"
-                      />
-                      <span className="text-[9px] text-slate-400 block">دوران واستقرار اللوح</span>
-                    </div>
-                  </div>
-
-                  {/* 5. Elbow & Wrist */}
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="p-2.5 bg-slate-50 border border-slate-200/80 rounded-xl space-y-1">
-                      <div className="flex items-center justify-between text-[11px] font-semibold">
-                        <span className="text-slate-700">مفصل الكوع (Elbow)</span>
-                        <span className="font-mono text-teal-700 font-bold text-xs">
-                          {currentAiFrameData ? `${currentAiFrameData.elbowAngle}°` : "--"}
-                        </span>
-                      </div>
-                      <Progress
-                        value={currentAiFrameData ? (currentAiFrameData.elbowAngle / 150) * 100 : 0}
-                        className="h-1.5 bg-slate-200"
-                      />
-                      <span className="text-[9px] text-slate-400 block">ثني وبسط الكوع</span>
-                    </div>
-
-                    <div className="p-2.5 bg-slate-50 border border-slate-200/80 rounded-xl space-y-1">
-                      <div className="flex items-center justify-between text-[11px] font-semibold">
-                        <span className="text-slate-700">مفصل الرسغ (Wrist)</span>
-                        <span className="font-mono text-teal-700 font-bold text-xs">
-                          {currentAiFrameData ? `${currentAiFrameData.wristAngle}°` : "--"}
-                        </span>
-                      </div>
-                      <Progress
-                        value={currentAiFrameData ? (currentAiFrameData.wristAngle / 90) * 100 : 0}
-                        className="h-1.5 bg-slate-200"
-                      />
-                      <span className="text-[9px] text-slate-400 block">محاذاة مع الساعد</span>
-                    </div>
-                  </div>
-
-                  {/* 6. Spine Flexion & Trunk Alignment */}
-                  <div className="p-2.5 bg-slate-50 border border-slate-200/80 rounded-xl space-y-1">
-                    <div className="flex items-center justify-between text-[11px] font-semibold">
-                      <span className="text-slate-700">ميلان العمود الفقري والجذع (Trunk & Spine Lean)</span>
-                      <span className="font-mono text-teal-700 font-bold text-xs">
-                        {currentAiFrameData ? `${currentAiFrameData.spineFlexion}°` : "--"}
-                      </span>
-                    </div>
-                    <Progress
-                      value={currentAiFrameData ? (currentAiFrameData.spineFlexion / 70) * 100 : 0}
-                      className="h-1.5 bg-slate-200"
-                    />
-                    <div className="flex justify-between text-[9px] text-slate-400">
-                      <span>0° عمودي</span>
-                      <span>المدى المطلوب أثناء السكوات: 25° - 45°</span>
-                    </div>
+                  {/* Catalog Movements List */}
+                  <div className="max-h-[420px] overflow-y-auto space-y-2.5 pe-1">
+                    {JOINT_MOVEMENT_CATALOG.filter(
+                      (j) => angleRegionTab === "all" || j.region === angleRegionTab
+                    ).map((jointEntry) => {
+                      const jointObj = currentAiFrameData?.fullAngles?.[jointEntry.joint] as Record<string, number> | undefined;
+                      return (
+                        <div
+                          key={jointEntry.joint}
+                          className="p-3 bg-slate-50 border border-slate-200/80 rounded-xl space-y-2"
+                        >
+                          <div className="flex items-center justify-between border-b border-slate-200/60 pb-1.5">
+                            <span className="text-xs font-extrabold text-slate-800">{jointEntry.titleAr}</span>
+                            <span className="text-[10px] font-mono text-slate-400">{jointEntry.titleEn}</span>
+                          </div>
+                          <div className="space-y-2">
+                            {jointEntry.movements.map((mov) => {
+                              const angleVal = jointObj ? Number(jointObj[mov.key] ?? 0) : null;
+                              const pct =
+                                angleVal !== null && mov.maxDeg > 0
+                                  ? Math.min(100, Math.round((angleVal / mov.maxDeg) * 100))
+                                  : 0;
+                              return (
+                                <div key={`${jointEntry.joint}-${mov.key}`} className="space-y-1">
+                                  <div className="flex items-center justify-between text-[11px]">
+                                    <span className="text-slate-700 font-medium">{mov.labelAr}</span>
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="text-[9px] text-slate-400">{mov.normalRange}</span>
+                                      <span className="font-mono font-bold text-emerald-700">
+                                        {angleVal !== null ? `${angleVal}°` : "--"}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <Progress value={pct} className="h-1.5 bg-slate-200" />
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
 
@@ -1808,10 +1685,10 @@ function AIAnalysisContent() {
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-extrabold text-indigo-950 flex items-center gap-1.5">
                       <Activity className="w-3.5 h-3.5 text-indigo-600" />
-                      تفعيل المجموعات العضلية في الحركة (Active Muscle Recruitment)
+                      العضلات العاملة في التمرين (Active Muscles)
                     </span>
                     <Badge className="bg-indigo-600 text-white text-[9px] font-bold">
-                      تقدير الذكاء الاصطناعي
+                      AI Target Muscles
                     </Badge>
                   </div>
 
@@ -1822,14 +1699,17 @@ function AIAnalysisContent() {
                           <div className="flex items-center justify-between text-[11px]">
                             <span className="font-medium text-slate-700">
                               {muscle.nameAr}
-                              <span className="text-[10px] text-slate-400 ms-1 font-mono">({muscle.nameEn})</span>
                             </span>
-                            <div className="flex items-center gap-1.5">
+                            <div className="flex items-center gap-1.5 shrink-0">
                               <span className={cn(
-                                "text-[9px] px-1.5 py-0.2 rounded font-semibold",
-                                muscle.role === "primary" ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-600"
+                                "text-[9px] px-1.5 py-0.5 rounded font-semibold",
+                                muscle.role === "primary"
+                                  ? "bg-emerald-100 text-emerald-800"
+                                  : muscle.role === "stabilizer"
+                                  ? "bg-blue-100 text-blue-800"
+                                  : "bg-slate-100 text-slate-600"
                               )}>
-                                {muscle.role === "primary" ? "رئيسية" : "مساعدة"}
+                                {muscle.role === "primary" ? "رئيسية" : muscle.role === "stabilizer" ? "مثبتة" : "مساعدة"}
                               </span>
                               <span className="font-mono font-bold text-indigo-900 text-xs">
                                 {muscle.percentage}%
@@ -1845,7 +1725,7 @@ function AIAnalysisContent() {
                     </div>
                   ) : (
                     <p className="text-[11px] text-slate-500 text-center py-2">
-                      اضغط &quot;تشغيل تحليل الوضعية&quot; لبدء حساب تفعيل العضلات حركياً.
+                      اضغط &quot;تشغيل تحليل الوضعية&quot; لاستخراج العضلات النشطة والمستهدفة في التمرين.
                     </p>
                   )}
                 </div>
@@ -1915,21 +1795,21 @@ function AIAnalysisContent() {
                   </div>
                 </div>
 
-                {/* Save Analysis to Cloud Button */}
+                {/* Save Analysis to Cloud & Patient File Button */}
                 <Button
                   onClick={saveAnalysisToCloud}
-                  disabled={isSavingAnalysis || !videoSrc}
+                  disabled={isSavingAnalysis || !selectedPatientId || (!videoSrc && !hasRunAnalysis && savedAnnotations.length === 0)}
                   className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold h-11 text-sm shadow-sm"
                 >
                   {isSavingAnalysis ? (
                     <>
                       <RefreshCw className="w-4 h-4 me-2 animate-spin" />
-                      جاري الحفظ في السحابة...
+                      جاري الحفظ في ملف المريض...
                     </>
                   ) : (
                     <>
                       <Save className="w-4 h-4 me-2 text-emerald-400" />
-                      حفظ التحليل في السحابة — Save to Cloud DB
+                      حفظ القياسات وربط التحليل بالمريض
                     </>
                   )}
                 </Button>
@@ -2138,7 +2018,7 @@ function AIAnalysisContent() {
             ) : savedAnalyses.length > 0 ? (
               <>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {savedAnalyses.map((analysis) => {
+                  {savedAnalyses.map((analysis, idx) => {
                     let valgusData: any = null;
                     try {
                       if (analysis.kneeValgus) {
@@ -2147,28 +2027,49 @@ function AIAnalysisContent() {
                           : analysis.kneeValgus;
                       }
                     } catch (e) {}
+                    const normAngles = normalizeJointAngles(analysis.jointAngles);
+                    const matchedPatientName =
+                      analysis.patient?.name ||
+                      patients.find((p) => p.id === analysis.patientId)?.name ||
+                      "المريض";
 
                     return (
                       <div
                         key={analysis.id}
                         className="p-4 bg-white border border-slate-200/90 rounded-xl hover:shadow-md hover:border-emerald-300 transition-all space-y-3"
                       >
-                        <div className="flex items-start justify-between">
-                          <div className="space-y-0.5">
-                            <h4 className="text-sm font-bold text-slate-900 truncate max-w-[180px]">
-                              {analysis.patient?.name || "المريض"}
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="space-y-0.5 min-w-0">
+                            <h4 className="text-sm font-bold text-slate-900 truncate">
+                              #{savedAnalyses.length - idx} • {analysis.exerciseName || matchedPatientName}
                             </h4>
                             <span className="text-[11px] text-slate-500 block">
-                              {formatDate(analysis.createdAt)}
+                              {matchedPatientName} • {formatDate(analysis.evaluatedAt || analysis.createdAt)}
                             </span>
                           </div>
 
                           <Badge
                             variant="secondary"
-                            className="bg-slate-100 text-slate-700 text-[10px]"
+                            className="bg-slate-100 text-slate-700 text-[10px] shrink-0"
                           >
-                            {analysis.cameraPlane === "sagittal" ? "جانبي Sagittal" : "أمامي Frontal"}
+                            {analysis.cameraPlane === "sagittal" ? "جانبي" : "أمامي"}
                           </Badge>
+                        </div>
+
+                        {/* Key Angles Mini Strip */}
+                        <div className="grid grid-cols-3 gap-1.5 text-[10px] bg-slate-50 p-2 rounded-lg border border-slate-100 text-center">
+                          <div>
+                            <span className="text-slate-400 block">الركبة / الكاحل</span>
+                            <strong className="text-slate-800">{normAngles.knee.flexion}° / {normAngles.ankle.dorsiflexion}°</strong>
+                          </div>
+                          <div>
+                            <span className="text-slate-400 block">الكتف / الكوع</span>
+                            <strong className="text-slate-800">{normAngles.shoulder.flexion}° / {normAngles.elbow.flexion}°</strong>
+                          </div>
+                          <div>
+                            <span className="text-slate-400 block">العمود الفقري</span>
+                            <strong className="text-slate-800">{normAngles.spine.flexion}°</strong>
+                          </div>
                         </div>
 
                         {/* Valgus summary badge */}
@@ -2188,9 +2089,20 @@ function AIAnalysisContent() {
                           )}
                         </div>
 
-                        <div className="flex items-center justify-between text-xs text-slate-500">
-                          <span className="truncate max-w-[170px] font-mono text-[11px]">
-                            {analysis.videoUrl}
+                        {/* Top Active Muscles */}
+                        {analysis.activeMuscles && analysis.activeMuscles.length > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            {analysis.activeMuscles.slice(0, 3).map((m, mIdx) => (
+                              <Badge key={mIdx} variant="outline" className="text-[9px] bg-indigo-50/50 text-indigo-800 border-indigo-200">
+                                {m.nameEn} {m.percentage}%
+                              </Badge>
+                            ))}
+                          </div>
+                        )}
+
+                        <div className="flex items-center justify-between text-xs text-slate-500 pt-1">
+                          <span className="truncate max-w-[140px] font-mono text-[11px]">
+                            {analysis.videoUrl || "فيديو"}
                           </span>
                           <Button
                             variant="ghost"
@@ -2199,13 +2111,14 @@ function AIAnalysisContent() {
                             onClick={() => {
                               setVideoName(analysis.videoUrl || "");
                               setCameraPlane(analysis.cameraPlane as "sagittal" | "frontal");
+                              if (analysis.exerciseName) setCustomExerciseName(analysis.exerciseName);
                               setStatusMessage({
                                 type: "info",
-                                text: `تم استرجاع بيانات التحليل المؤرخ ${formatDate(analysis.createdAt)}`,
+                                text: `تم استرجاع بيانات التحليل المؤرخ ${formatDate(analysis.evaluatedAt || analysis.createdAt)}`,
                               });
                             }}
                           >
-                            عرض التحليل
+                            عرض البيانات
                           </Button>
                         </div>
                       </div>
@@ -2213,80 +2126,100 @@ function AIAnalysisContent() {
                   })}
                 </div>
 
-                {/* Comparative Multi-Session Analysis if >= 2 sessions */}
-                {savedAnalyses.length >= 2 && (
-                  <div className="mt-6 pt-5 border-t border-slate-200/80 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <h4 className="text-sm font-bold text-slate-800 flex items-center gap-2">
-                        <Sparkles className="w-4 h-4 text-emerald-600" />
-                        مقارنة التطور الحركي بين الجلسات (Multi-Session Progress Comparison)
-                      </h4>
-                      <Badge variant="outline" className="text-xs text-emerald-700 border-emerald-300 bg-emerald-50">
-                        مقارنة أول جلسة بأحدث جلسة
-                      </Badge>
+                {/* Full Multi-Session Comparative Analysis when >= 2 sessions */}
+                {savedAnalyses.length >= 2 && (() => {
+                  const baseline =
+                    savedAnalyses.find((a) => a.id === compareBaselineId) ||
+                    savedAnalyses[savedAnalyses.length - 1];
+                  const latest =
+                    savedAnalyses.find((a) => a.id === compareLatestId) ||
+                    savedAnalyses[0];
+                  const rows = computeSessionComparison(baseline, latest);
+                  return (
+                    <div className="mt-6 pt-5 border-t border-slate-200/80 space-y-4">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div>
+                          <h4 className="text-sm sm:text-base font-bold text-slate-900 flex items-center gap-2">
+                            <Sparkles className="w-4 h-4 text-emerald-600" />
+                            مقارنة شاملة للقياسات وزوايا المفاصل عبر الجلسات لنفس المريض
+                          </h4>
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            اختر أي جلستين للمقارنة ومتابعة تحسن المفاصل (الكتف، لوح الكتف، الكوع، الرسغ، العمود الفقري، الورك، الركبة، الكاحل)
+                          </p>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2 text-xs">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-slate-500 font-semibold">أول جلسة:</span>
+                            <Select value={baseline.id} onValueChange={setCompareBaselineId}>
+                              <SelectTrigger className="h-8 text-xs w-44 bg-white">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {savedAnalyses.map((a, i) => (
+                                  <SelectItem key={`b-${a.id}`} value={a.id}>
+                                    #{savedAnalyses.length - i} — {formatDate(a.evaluatedAt || a.createdAt)}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-emerald-700 font-semibold">مقابل جلسة:</span>
+                            <Select value={latest.id} onValueChange={setCompareLatestId}>
+                              <SelectTrigger className="h-8 text-xs w-44 bg-white border-emerald-300">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {savedAnalyses.map((a, i) => (
+                                  <SelectItem key={`l-${a.id}`} value={a.id}>
+                                    #{savedAnalyses.length - i} — {formatDate(a.evaluatedAt || a.createdAt)}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+                        <table className="w-full text-xs text-right border-collapse">
+                          <thead className="bg-slate-50 border-b border-slate-200 text-slate-700 font-bold">
+                            <tr>
+                              <th className="py-2.5 px-3">المفصل</th>
+                              <th className="py-2.5 px-3">الحركة التشريحية</th>
+                              <th className="py-2.5 px-3">القياس السابق</th>
+                              <th className="py-2.5 px-3">القياس الأحدث</th>
+                              <th className="py-2.5 px-3">مقدار التغير (Delta)</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {rows.map((r) => {
+                              const improved = r.lowerIsBetter ? r.delta < 0 : r.delta > 0;
+                              return (
+                                <tr key={r.id} className="hover:bg-slate-50/70">
+                                  <td className="py-2 px-3 font-bold text-slate-800">{r.jointAr}</td>
+                                  <td className="py-2 px-3 text-slate-600">{r.movementAr}</td>
+                                  <td className="py-2 px-3 font-mono text-slate-500">{r.baselineVal}°</td>
+                                  <td className="py-2 px-3 font-mono font-bold text-emerald-700">{r.latestVal}°</td>
+                                  <td className="py-2 px-3 font-mono">
+                                    <Badge
+                                      variant={improved ? "success" : "secondary"}
+                                      className="text-[10px]"
+                                    >
+                                      {r.delta > 0 ? `+${r.delta}°` : `${r.delta}°`}
+                                    </Badge>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                      <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-1">
-                        <span className="text-[11px] font-semibold text-slate-500">الجلسة الأولى (Baseline):</span>
-                        <div className="text-xs font-bold text-slate-800">{formatDate(savedAnalyses[savedAnalyses.length - 1].createdAt)}</div>
-                        <div className="text-[11px] text-slate-600">
-                          انحراف الركبة (Valgus): {
-                            (() => {
-                              try {
-                                const v = typeof savedAnalyses[savedAnalyses.length - 1].kneeValgus === "string"
-                                  ? JSON.parse(savedAnalyses[savedAnalyses.length - 1].kneeValgus as string)
-                                  : savedAnalyses[savedAnalyses.length - 1].kneeValgus;
-                                return v ? `${v.angle}°` : "--";
-                              } catch { return "--"; }
-                            })()
-                          }
-                        </div>
-                      </div>
-
-                      <div className="p-3.5 bg-emerald-50/60 rounded-xl border border-emerald-200 space-y-1">
-                        <span className="text-[11px] font-semibold text-emerald-800">أحدث جلسة (Latest Session):</span>
-                        <div className="text-xs font-bold text-slate-800">{formatDate(savedAnalyses[0].createdAt)}</div>
-                        <div className="text-[11px] text-emerald-700 font-semibold">
-                          انحراف الركبة (Valgus): {
-                            (() => {
-                              try {
-                                const v = typeof savedAnalyses[0].kneeValgus === "string"
-                                  ? JSON.parse(savedAnalyses[0].kneeValgus as string)
-                                  : savedAnalyses[0].kneeValgus;
-                                return v ? `${v.angle}°` : "--";
-                              } catch { return "--"; }
-                            })()
-                          }
-                        </div>
-                      </div>
-
-                      <div className="p-3.5 bg-indigo-50/60 rounded-xl border border-indigo-200 space-y-1">
-                        <span className="text-[11px] font-semibold text-indigo-800">التحسن الحركي والسيطرة:</span>
-                        <div className="text-xs font-extrabold text-indigo-900">
-                          {(() => {
-                            try {
-                              const firstValgus = typeof savedAnalyses[savedAnalyses.length - 1].kneeValgus === "string"
-                                ? JSON.parse(savedAnalyses[savedAnalyses.length - 1].kneeValgus as string)
-                                : savedAnalyses[savedAnalyses.length - 1].kneeValgus;
-                              const latestValgus = typeof savedAnalyses[0].kneeValgus === "string"
-                                ? JSON.parse(savedAnalyses[0].kneeValgus as string)
-                                : savedAnalyses[0].kneeValgus;
-                              if (firstValgus?.angle && latestValgus?.angle) {
-                                const delta = (firstValgus.angle - latestValgus.angle).toFixed(1);
-                                return Number(delta) >= 0 ? `تحسن بمقدار ${delta}° في استقامة المفصل` : `تغير بمقدار ${delta}°`;
-                              }
-                              return "تحسن ملحوظ في ثبات المفصل والتحكم الحركي";
-                            } catch {
-                              return "مستمر في التحسن";
-                            }
-                          })()}
-                        </div>
-                        <span className="text-[10px] text-slate-500 block">انخفاض إجهاد الأربطة وتحسن التماثل الحركي</span>
-                      </div>
-                    </div>
-                  </div>
-                )}
+                  );
+                })()}
               </>
             ) : (
               <div className="py-12 text-center text-slate-400 space-y-2">

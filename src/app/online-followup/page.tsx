@@ -510,7 +510,7 @@ function OnlineFollowUpContent() {
   const triggerWhatsAppCall = (phone?: string | null, patientName?: string) => {
     const targetPhone = phone || quickPhone || "201012345678";
     const cleaned = targetPhone.replace(/\D/g, "");
-    const msg = `مرحباً ${patientName || "عزيزي المريض"}، تحياتنا من عيادة Peak Motion للعلاج الطبيعي والتأهيل الحركي. يرجى الاستعداد لبدء جلسة المتابعة التأهيلية أونلاين عبر مكالمة الفيديو.`;
+    const msg = `مرحباً ${patientName || "عزيزي المريض"}، تحياتنا من عيادة Revive للعلاج الطبيعي والتأهيل الحركي. يرجى الاستعداد لبدء جلسة المتابعة التأهيلية أونلاين عبر مكالمة الفيديو.`;
     const url = generateWhatsAppLink(cleaned, msg);
     window.open(url, "_blank");
   };
@@ -1463,7 +1463,7 @@ function OnlineFollowUpContent() {
                 <div>
                   <h3 className="font-bold text-sm text-white flex items-center gap-2">
                     <Monitor className="w-4 h-4 text-emerald-400" />
-                    غرفة التأهيل الافتراضي المباشر — Peak Motion WebRTC Room
+                    غرفة التأهيل الافتراضي المباشر — Revive WebRTC Room
                   </h3>
                   <p className="text-xs text-slate-400">
                     المريض: {activeWebRtcConsultation?.patient.name || "مريض تجريبي"} (
@@ -1538,7 +1538,7 @@ function OnlineFollowUpContent() {
                   <div className="flex-1 flex items-center justify-center text-slate-400 text-xs">
                     {webrtcVideoOff ? "الكاميرا مغلقة" : "كادر المعالج الطبيعي"}
                   </div>
-                  <div className="text-[9px] text-emerald-400 text-end">Peak Motion Pro</div>
+                  <div className="text-[9px] text-emerald-400 text-end">Revive Pro</div>
                 </div>
               </div>
             </div>
@@ -1637,7 +1637,7 @@ function OnlineFollowUpContent() {
 
             <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-900 leading-relaxed">
               <span className="font-bold block mb-1">نص الرسالة التي ستُرسل للمريض:</span>
-              &ldquo;مرحباً {quickPatientName || "عزيزي المريض"}، تحياتنا من عيادة Peak Motion للعلاج الطبيعي. يرجى الاستعداد لبدء جلسة المتابعة التأهيلية أونلاين عبر مكالمة الفيديو.&rdquo;
+              &ldquo;مرحباً {quickPatientName || "عزيزي المريض"}، تحياتنا من عيادة Revive للعلاج الطبيعي. يرجى الاستعداد لبدء جلسة المتابعة التأهيلية أونلاين عبر مكالمة الفيديو.&rdquo;
             </div>
           </div>
 

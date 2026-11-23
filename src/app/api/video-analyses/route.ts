@@ -1,120 +1,81 @@
 import { NextRequest, NextResponse } from "next/server";
-import prisma from "@/lib/db";
+import prisma, { isDbConfigured } from "@/lib/db";
+import { getLiveVideoAnalysesAsync, saveLiveVideoAnalysisAsync } from "@/lib/live-store";
 
-// GET /api/video-analyses — list analyses for a patient or recent analyses
 export async function GET(request: NextRequest) {
-  try {
-    const patientId = request.nextUrl.searchParams.get("patientId") || "";
-    const limit = parseInt(request.nextUrl.searchParams.get("limit") || "20", 10);
+  const patientId = request.nextUrl.searchParams.get("patientId") || "";
 
-    const where: Record<string, unknown> = {};
-    if (patientId) {
-      where.patientId = patientId;
+  if (isDbConfigured()) {
+    try {
+      const where: Record<string, unknown> = {};
+      if (patientId) where.patientId = patientId;
+
+      const analyses = await prisma.videoAnalysis.findMany({
+        where,
+        include: { patient: { select: { id: true, name: true, injuryType: true } } },
+        orderBy: { createdAt: "desc" },
+      });
+
+      if (analyses && analyses.length > 0) {
+        return NextResponse.json(analyses);
+      }
+    } catch {
+      // Fallback
     }
+  }
 
-    const analyses = await prisma.videoAnalysis.findMany({
-      where,
-      orderBy: { createdAt: "desc" },
-      take: limit,
-      include: {
-        patient: {
-          select: {
-            id: true,
-            name: true,
-            injuryType: true,
-            injuredSide: true,
-          },
-        },
-      },
-    });
-
-    return NextResponse.json(analyses);
+  try {
+    const liveAnalyses = await getLiveVideoAnalysesAsync(patientId || undefined);
+    return NextResponse.json(liveAnalyses);
   } catch (error) {
-    console.error("VideoAnalysis GET error:", error);
-    // In case DB is offline or not migrated yet, return empty list gracefully
-    return NextResponse.json(
-      [],
-      { status: 200 }
-    );
+    console.error("VideoAnalyses GET error:", error);
+    return NextResponse.json([], { status: 200 });
   }
 }
 
-// POST /api/video-analyses — save new video analysis
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    const {
-      patientId,
-      videoUrl,
-      cameraPlane,
-      poseResults,
-      annotations,
-      kneeValgus,
-      thumbnailUrl,
-      userId,
-    } = body;
+    const body = await request.json().catch(() => ({}));
 
-    if (!patientId || !videoUrl || !cameraPlane) {
-      return NextResponse.json(
-        { error: "بيانات ناقصة (patientId, videoUrl, cameraPlane مطلوبة)" },
-        { status: 400 }
-      );
-    }
+    const saved = await saveLiveVideoAnalysisAsync({
+      id: body.id,
+      patientId: body.patientId || null,
+      userId: body.userId || "admin-user",
+      exerciseName: body.exerciseName || "تحليل حركي مفصل بالذكاء الاصطناعي",
+      cameraPlane: body.cameraPlane || "sagittal",
+      evaluatedAt: body.evaluatedAt || new Date().toISOString(),
+      jointAngles: body.jointAngles || {},
+      activeMuscles: body.activeMuscles || [],
+      summaryNotes: body.summaryNotes || null,
+      poseResults: body.poseResults || null,
+      kneeValgus: body.kneeValgus || null,
+      thumbnailUrl: body.thumbnailUrl || null,
+      videoUrl: body.videoUrl || null,
+    });
 
-    // Determine target userId
-    let finalUserId = userId;
-    if (!finalUserId) {
-      const patient = await prisma.patient.findUnique({
-        where: { id: patientId },
-        select: { userId: true },
-      });
-      if (patient?.userId) {
-        finalUserId = patient.userId;
-      } else {
-        const firstUser = await prisma.user.findFirst();
-        if (firstUser) {
-          finalUserId = firstUser.id;
-        } else {
-          const defaultUser = await prisma.user.create({
-            data: {
-              email: "dr.peakmotion@clinic.local",
-              name: "أخصائي العلاج الطبيعي",
-              role: "PHYSIOTHERAPIST",
-            },
-          });
-          finalUserId = defaultUser.id;
-        }
+    if (isDbConfigured() && body.patientId) {
+      try {
+        await prisma.videoAnalysis.create({
+          data: {
+            id: saved.id,
+            patientId: body.patientId,
+            userId: body.userId || "admin-user",
+            videoUrl: body.videoUrl || "local-upload",
+            cameraPlane: body.cameraPlane || "sagittal",
+            poseResults: body.poseResults ? JSON.stringify(body.poseResults) : null,
+            annotations: body.annotations ? JSON.stringify(body.annotations) : null,
+            kneeValgus: body.kneeValgus ? JSON.stringify(body.kneeValgus) : null,
+            thumbnailUrl: body.thumbnailUrl || null,
+          },
+        });
+      } catch (dbErr) {
+        console.warn("DB VideoAnalysis sync skipped:", dbErr);
       }
     }
 
-    const analysis = await prisma.videoAnalysis.create({
-      data: {
-        patientId,
-        userId: finalUserId,
-        videoUrl,
-        cameraPlane,
-        poseResults: typeof poseResults === "object" ? JSON.stringify(poseResults) : poseResults || null,
-        annotations: typeof annotations === "object" ? JSON.stringify(annotations) : annotations || null,
-        kneeValgus: typeof kneeValgus === "object" ? JSON.stringify(kneeValgus) : kneeValgus || null,
-        thumbnailUrl: thumbnailUrl || null,
-      },
-      include: {
-        patient: {
-          select: {
-            id: true,
-            name: true,
-            injuryType: true,
-          },
-        },
-      },
-    });
-
-    return NextResponse.json(analysis, { status: 201 });
-  } catch (error: any) {
-    console.error("VideoAnalysis POST error:", error);
-    return NextResponse.json(
-      { error: "فشل حفظ التحليل في قاعدة البيانات", details: error?.message || String(error) },
-      { status: 500 }
-    );
+    return NextResponse.json(saved, { status: 201 });
+  } catch (error) {
+    console.error("VideoAnalyses POST error:", error);
+    return NextResponse.json({ error: "Failed to save video analysis" }, { status: 500 });
   }
 }
