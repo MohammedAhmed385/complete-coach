@@ -29,6 +29,9 @@ import {
   Database,
   ArrowRight,
   ExternalLink,
+  Copy,
+  Check,
+  KeyRound,
 } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -38,7 +41,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
-import { useAuth, ADMIN_EMAIL } from "@/lib/auth-context";
+import { useAuth } from "@/lib/auth-context";
+import { ADMIN_SIGNUP_CODE_DEFAULT } from "@/lib/auth-config";
 
 interface PatientItem {
   id: string;
@@ -68,7 +72,7 @@ interface ProtocolItem {
 
 export default function AdminPage() {
   const router = useRouter();
-  const { user, isAdmin, loginAsAdmin } = useAuth();
+  const { user, isAdmin } = useAuth();
 
   const [activeTab, setActiveTab] = useState("settings");
   const [patients, setPatients] = useState<PatientItem[]>([]);
@@ -76,6 +80,7 @@ export default function AdminPage() {
   const [protocols, setProtocols] = useState<ProtocolItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [copiedAdminCode, setCopiedAdminCode] = useState(false);
 
   // Platform editable settings
   const [webSettings, setWebSettings] = useState({
@@ -430,13 +435,13 @@ export default function AdminPage() {
                     </div>
                   </div>
 
-                  {/* Authorized Admin Gmail Connection Card */}
-                  <div className="p-5 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
+                  {/* Authorized Admin Accounts & Invite Code Card */}
+                  <div className="p-5 rounded-2xl bg-slate-50 border border-slate-200 space-y-4">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <ShieldCheck className="w-4 h-4 text-emerald-600" />
                         <span className="font-bold text-xs text-slate-900">
-                          حسابات Gmail المعتمدة لإدارة منصة Revive والتواصل:
+                          حسابات الإدارة المعتمدة وكود تسجيل مدير جديد:
                         </span>
                       </div>
                       <Badge className="bg-emerald-600 text-white text-[10px]">
@@ -458,9 +463,40 @@ export default function AdminPage() {
                         </div>
                       ))}
                     </div>
-                    <p className="text-[11px] text-slate-500 leading-relaxed">
-                      💡 جميع الحسابات الثلاثة أعلاه تملك صلاحيات Super Admin الكاملة للدخول المباشر، وتصلها جميع إشعارات واستفسارات المرضى عبر Gmail.
-                    </p>
+
+                    <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div className="space-y-0.5">
+                        <div className="flex items-center gap-1.5 text-xs font-bold text-amber-950">
+                          <KeyRound className="w-3.5 h-3.5 text-amber-600" />
+                          <span>كود تفعيل تسجيل حساب مدير جديد (Admin Invite Code):</span>
+                        </div>
+                        <p className="text-[11px] text-amber-800">
+                          يستخدم هذا الكود عند إنشاء حساب مدير ببريد إلكتروني إضافي من صفحة تسجيل الدخول، بينما الحسابات الثلاثة أعلاه مسموح لها بتعيين كلمة المرور مباشرة بدون كود.
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0 bg-white px-3 py-1.5 rounded-lg border border-amber-200">
+                        <code className="font-mono font-bold text-xs text-slate-900 dir-ltr">
+                          {ADMIN_SIGNUP_CODE_DEFAULT}
+                        </code>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            navigator.clipboard?.writeText(ADMIN_SIGNUP_CODE_DEFAULT);
+                            setCopiedAdminCode(true);
+                            setTimeout(() => setCopiedAdminCode(false), 2000);
+                          }}
+                          className="h-7 px-2 text-amber-700 hover:bg-amber-100"
+                        >
+                          {copiedAdminCode ? (
+                            <Check className="w-3.5 h-3.5 text-emerald-600" />
+                          ) : (
+                            <Copy className="w-3.5 h-3.5" />
+                          )}
+                        </Button>
+                      </div>
+                    </div>
                   </div>
 
                   {/* Announcement Banner */}

@@ -4,7 +4,7 @@ import * as React from "react";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { useAuth, ADMIN_EMAIL } from "@/lib/auth-context";
+import { useAuth } from "@/lib/auth-context";
 import { upsertLocalCase } from "@/lib/client-sync";
 import {
   User,
@@ -289,7 +289,7 @@ const REHAB_PHASES_DATA = [
 
 export default function AddCasePage() {
   const router = useRouter();
-  const { user, isAdmin, loginAsAdmin } = useAuth();
+  const { isAdmin } = useAuth();
 
   // Active tab state
   const [activeTab, setActiveTab] = useState<string>("patient-info");
@@ -318,14 +318,12 @@ export default function AddCasePage() {
           </div>
 
           <div className="pt-2 space-y-3">
-            <Button
-              onClick={() => {
-                loginAsAdmin();
-              }}
-              className="w-full h-12 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 font-black gap-2 text-sm shadow-md"
+            <Link
+              href="/login"
+              className="w-full h-12 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 font-black gap-2 text-sm shadow-md flex items-center justify-center transition-all"
             >
-              <span>دخول كمدير النظام (Admin)</span>
-            </Button>
+              <span>تسجيل الدخول بحساب الإدارة</span>
+            </Link>
 
             <Link
               href="/"

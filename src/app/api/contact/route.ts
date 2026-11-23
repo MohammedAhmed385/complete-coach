@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { saveLiveInquiryAsync, getLiveInquiriesAsync } from "@/lib/live-store";
-import { ADMIN_EMAILS, PRIMARY_ADMIN_EMAIL } from "@/lib/auth-context";
+import { ADMIN_EMAILS, PRIMARY_ADMIN_EMAIL } from "@/lib/auth-config";
 
 export async function GET() {
   try {

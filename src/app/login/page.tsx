@@ -1,58 +1,88 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   ShieldCheck,
   User,
+  UserPlus,
   ArrowRight,
   CheckCircle2,
   Activity,
   Lock,
   Mail,
   AlertCircle,
+  Eye,
+  EyeOff,
+  KeyRound,
 } from "lucide-react";
-import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
+import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { useAuth } from "@/lib/auth-context";
+import { useAuth, checkIsAdminEmail } from "@/lib/auth-context";
+import { cn } from "@/lib/utils";
+
+type AuthMode = "signin" | "signup";
 
 export default function LoginPage() {
   const router = useRouter();
-  const { user, isAdmin, signInWithGoogle, loginWithCredentials, logout } = useAuth();
+  const { user, isAdmin, signUp, loginWithCredentials, logout } = useAuth();
 
+  const [mode, setMode] = useState<AuthMode>("signin");
+
+  // Sign In state
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showSignInPassword, setShowSignInPassword] = useState(false);
+
+  // Sign Up state
+  const [accountType, setAccountType] = useState<"USER" | "ADMIN">("USER");
+  const [fullName, setFullName] = useState("");
+  const [signUpEmail, setSignUpEmail] = useState("");
+  const [signUpPassword, setSignUpPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [adminCode, setAdminCode] = useState("");
+  const [showSignUpPassword, setShowSignUpPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  const [errorCode, setErrorCode] = useState<string | undefined>(undefined);
   const [successMessage, setSuccessMessage] = useState("");
 
-  const handleGoogleSignIn = async () => {
-    setIsLoading(true);
-    setErrorMessage("");
-    setSuccessMessage("");
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("mode") === "signup") {
+        setMode("signup");
+      }
+    }
+  }, []);
 
-    try {
-      await signInWithGoogle();
-      setSuccessMessage("جاري المتابعة بحساب Google...");
-    } catch {
-      // If external Google OAuth is not configured with Client ID yet,
-      // guide the user seamlessly to enter their Gmail in the form
-      setErrorMessage("يرجى إدخال بريد Google / Gmail وكلمة المرور في الحقول أدناه للمتابعة.");
-      setIsLoading(false);
+  const switchMode = (nextMode: AuthMode, prefillEmail?: string) => {
+    setMode(nextMode);
+    setErrorMessage("");
+    setErrorCode(undefined);
+    setSuccessMessage("");
+    if (prefillEmail && nextMode === "signup") {
+      setSignUpEmail(prefillEmail);
+      if (checkIsAdminEmail(prefillEmail)) {
+        setAccountType("ADMIN");
+      }
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSignInSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage("");
+    setErrorCode(undefined);
     setSuccessMessage("");
 
-    if (!email.trim()) {
-      setErrorMessage("يرجى إدخال البريد الإلكتروني");
+    if (!email.trim() || !password) {
+      setErrorMessage("يرجى إدخال البريد الإلكتروني وكلمة المرور للمتابعة.");
       return;
     }
 
@@ -60,7 +90,10 @@ export default function LoginPage() {
     try {
       const result = await loginWithCredentials(email.trim(), password);
       if (!result.success) {
-        setErrorMessage(result.error || "تعذر تسجيل الدخول، يرجى التحقق من البيانات.");
+        setErrorCode(result.code);
+        setErrorMessage(
+          result.error || "تعذر تسجيل الدخول، يرجى التحقق من البيانات."
+        );
         setIsLoading(false);
         return;
       }
@@ -68,17 +101,85 @@ export default function LoginPage() {
       setSuccessMessage("تم تسجيل الدخول بنجاح! جاري توجيهك...");
       setTimeout(() => {
         router.push("/");
-      }, 700);
+      }, 650);
     } catch {
-      setErrorMessage("حدث خطأ أثناء تسجيل الدخول");
+      setErrorMessage("حدث خطأ أثناء تسجيل الدخول.");
       setIsLoading(false);
     }
   };
 
-  return (
-    <div className="min-h-screen bg-gradient-to-b from-slate-900 via-navy-950 to-slate-900 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8" dir="rtl">
-      <div className="max-w-md w-full space-y-6">
+  const handleSignUpSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMessage("");
+    setErrorCode(undefined);
+    setSuccessMessage("");
 
+    if (fullName.trim().length < 2) {
+      setErrorMessage("يرجى إدخال الاسم الكامل (حرفين على الأقل).");
+      return;
+    }
+
+    if (!signUpEmail.trim()) {
+      setErrorMessage("يرجى إدخال البريد الإلكتروني.");
+      return;
+    }
+
+    if (signUpPassword.length < 6) {
+      setErrorMessage("يجب أن تتكون كلمة المرور من 6 أحرف أو أرقام على الأقل.");
+      return;
+    }
+
+    if (signUpPassword !== confirmPassword) {
+      setErrorMessage("كلمة المرور وتأكيد كلمة المرور غير متطابقتين.");
+      return;
+    }
+
+    const isPreauthorizedAdmin = checkIsAdminEmail(signUpEmail);
+    if (accountType === "ADMIN" && !isPreauthorizedAdmin && !adminCode.trim()) {
+      setErrorMessage("يرجى إدخال كود تفعيل الإدارة لإنشاء حساب مدير.");
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const result = await signUp({
+        name: fullName.trim(),
+        email: signUpEmail.trim(),
+        password: signUpPassword,
+        confirmPassword,
+        accountType,
+        adminCode: adminCode.trim() || undefined,
+      });
+
+      if (!result.success) {
+        setErrorCode(result.code);
+        setErrorMessage(
+          result.error || "تعذر إنشاء الحساب، يرجى مراجعة البيانات المدخلة."
+        );
+        setIsLoading(false);
+        return;
+      }
+
+      setSuccessMessage("تم إنشاء الحساب وتسجيل الدخول بنجاح! جاري توجيهك...");
+      setTimeout(() => {
+        router.push("/");
+      }, 650);
+    } catch {
+      setErrorMessage("حدث خطأ غير متوقع أثناء إنشاء الحساب.");
+      setIsLoading(false);
+    }
+  };
+
+  const isPreauthorizedAdminEmail = checkIsAdminEmail(signUpEmail);
+  const passwordMismatch =
+    confirmPassword.length > 0 && signUpPassword !== confirmPassword;
+
+  return (
+    <div
+      className="min-h-screen bg-gradient-to-b from-slate-900 via-navy-950 to-slate-900 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8"
+      dir="rtl"
+    >
+      <div className="max-w-md w-full space-y-6">
         {/* Brand Header */}
         <div className="text-center">
           <Link href="/" className="inline-flex items-center gap-2.5 group">
@@ -95,10 +196,12 @@ export default function LoginPage() {
             </div>
           </Link>
           <h2 className="mt-4 text-2xl font-black text-white">
-            تسجيل الدخول
+            {mode === "signin" ? "تسجيل الدخول" : "إنشاء حساب جديد"}
           </h2>
           <p className="mt-1 text-xs text-slate-400">
-            أدخل بيانات حسابك للمتابعة والوصول للمنصة
+            {mode === "signin"
+              ? "أدخل البريد الإلكتروني وكلمة المرور للدخول إلى حسابك"
+              : "اختر نوع الحساب وأنشئ كلمة مرور آمنة للمستخدم أو المدير"}
           </p>
         </div>
 
@@ -114,13 +217,19 @@ export default function LoginPage() {
                 </Badge>
               )}
             </div>
-            <div className="text-xs text-slate-400 mb-3">{user.email}</div>
+            <div className="text-xs text-slate-400 mb-3 dir-ltr">
+              {user.email}
+            </div>
             <div className="flex items-center justify-center gap-4 mt-2">
-              <Link href="/" className="text-xs text-emerald-400 hover:underline font-bold">
+              <Link
+                href="/"
+                className="text-xs text-emerald-400 hover:underline font-bold"
+              >
                 الذهاب للوحة التحكم ←
               </Link>
               <button
-                onClick={logout}
+                type="button"
+                onClick={() => logout()}
                 className="text-xs text-rose-400 hover:underline"
               >
                 تسجيل الخروج
@@ -139,98 +248,356 @@ export default function LoginPage() {
 
         {/* Error Alert */}
         {errorMessage && (
-          <div className="p-3.5 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs text-center flex items-center justify-center gap-2 animate-fade-in">
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>{errorMessage}</span>
+          <div className="p-3.5 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs text-center space-y-2 animate-fade-in">
+            <div className="flex items-center justify-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{errorMessage}</span>
+            </div>
+            {errorCode === "ACCOUNT_NOT_FOUND" && mode === "signin" && (
+              <button
+                type="button"
+                onClick={() => switchMode("signup", email.trim())}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] transition"
+              >
+                <UserPlus className="w-3.5 h-3.5" />
+                <span>إنشاء حساب بهذا البريد الآن</span>
+              </button>
+            )}
           </div>
         )}
 
-        {/* Secure Login Card */}
-        <Card className="border-slate-800 bg-slate-900/90 shadow-2xl">
+        {/* Auth Card */}
+        <Card className="border-slate-800 bg-slate-900/90 shadow-2xl overflow-hidden">
+          {/* Segmented Mode Switch */}
+          <div className="grid grid-cols-2 p-1.5 bg-slate-950/80 border-b border-slate-800 gap-1.5">
+            <button
+              type="button"
+              onClick={() => switchMode("signin")}
+              className={cn(
+                "py-2.5 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all",
+                mode === "signin"
+                  ? "bg-emerald-600 text-white shadow-md shadow-emerald-600/20"
+                  : "text-slate-400 hover:text-white hover:bg-white/5"
+              )}
+            >
+              <Lock className="w-3.5 h-3.5" />
+              <span>تسجيل الدخول</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => switchMode("signup")}
+              className={cn(
+                "py-2.5 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all",
+                mode === "signup"
+                  ? "bg-emerald-600 text-white shadow-md shadow-emerald-600/20"
+                  : "text-slate-400 hover:text-white hover:bg-white/5"
+              )}
+            >
+              <UserPlus className="w-3.5 h-3.5" />
+              <span>إنشاء حساب جديد</span>
+            </button>
+          </div>
+
           <CardContent className="space-y-4 pt-6">
-
-            {/* Google OAuth Button */}
-            <div>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={handleGoogleSignIn}
-                disabled={isLoading}
-                className="w-full py-5 border-slate-700 bg-white/5 hover:bg-white/10 text-white font-bold flex items-center justify-center gap-3 transition rounded-xl"
-              >
-                <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24">
-                  <path
-                    fill="#4285F4"
-                    d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+            {mode === "signin" ? (
+              <form onSubmit={handleSignInSubmit} className="space-y-4">
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-slate-300 font-semibold flex items-center gap-1.5">
+                    <Mail className="w-3.5 h-3.5 text-slate-400" />
+                    <span>البريد الإلكتروني</span>
+                  </Label>
+                  <Input
+                    type="email"
+                    required
+                    placeholder="name@example.com"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="bg-slate-800/80 border-slate-700 text-white text-xs text-left dir-ltr rounded-xl h-11 placeholder:text-slate-500 focus:border-emerald-500"
                   />
-                  <path
-                    fill="#34A853"
-                    d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-slate-300 font-semibold flex items-center gap-1.5">
+                    <Lock className="w-3.5 h-3.5 text-slate-400" />
+                    <span>كلمة المرور</span>
+                  </Label>
+                  <div className="relative">
+                    <Input
+                      type={showSignInPassword ? "text" : "password"}
+                      required
+                      placeholder="••••••••"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="bg-slate-800/80 border-slate-700 text-white text-xs text-left dir-ltr rounded-xl h-11 pl-10 placeholder:text-slate-500 focus:border-emerald-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowSignInPassword((v) => !v)}
+                      aria-label={
+                        showSignInPassword ? "إخفاء كلمة المرور" : "إظهار كلمة المرور"
+                      }
+                      className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white transition"
+                    >
+                      {showSignInPassword ? (
+                        <EyeOff className="w-4 h-4" />
+                      ) : (
+                        <Eye className="w-4 h-4" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                <Button
+                  type="submit"
+                  disabled={isLoading || !email.trim() || !password}
+                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs h-11 rounded-xl shadow-md shadow-emerald-600/20 transition-all"
+                >
+                  {isLoading ? "جاري التحقق..." : "تسجيل الدخول"}
+                </Button>
+
+                <p className="text-center text-[11px] text-slate-400 pt-1">
+                  ليس لديك حساب بعد؟{" "}
+                  <button
+                    type="button"
+                    onClick={() => switchMode("signup", email.trim())}
+                    className="text-emerald-400 hover:underline font-bold"
+                  >
+                    أنشئ حساباً الآن (مستخدم أو مدير)
+                  </button>
+                </p>
+              </form>
+            ) : (
+              <form onSubmit={handleSignUpSubmit} className="space-y-4">
+                {/* Account Type Selector */}
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-slate-300 font-semibold">
+                    نوع الحساب
+                  </Label>
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => setAccountType("USER")}
+                      className={cn(
+                        "p-3 rounded-xl border text-right transition-all space-y-1",
+                        accountType === "USER"
+                          ? "bg-emerald-500/15 border-emerald-500 text-white shadow-sm"
+                          : "bg-slate-800/60 border-slate-700 text-slate-300 hover:border-slate-600"
+                      )}
+                    >
+                      <div className="flex items-center gap-1.5 font-bold text-xs">
+                        <User
+                          className={cn(
+                            "w-3.5 h-3.5",
+                            accountType === "USER"
+                              ? "text-emerald-400"
+                              : "text-slate-400"
+                          )}
+                        />
+                        <span>مستخدم / عميل</span>
+                      </div>
+                      <p className="text-[10px] text-slate-400 leading-snug">
+                        للتواصل وحجز الاستشارات التأهيلية
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setAccountType("ADMIN")}
+                      className={cn(
+                        "p-3 rounded-xl border text-right transition-all space-y-1",
+                        accountType === "ADMIN"
+                          ? "bg-amber-500/15 border-amber-400 text-white shadow-sm"
+                          : "bg-slate-800/60 border-slate-700 text-slate-300 hover:border-slate-600"
+                      )}
+                    >
+                      <div className="flex items-center gap-1.5 font-bold text-xs">
+                        <ShieldCheck
+                          className={cn(
+                            "w-3.5 h-3.5",
+                            accountType === "ADMIN"
+                              ? "text-amber-400"
+                              : "text-slate-400"
+                          )}
+                        />
+                        <span>مدير / طبيب (Admin)</span>
+                      </div>
+                      <p className="text-[10px] text-slate-400 leading-snug">
+                        لإدارة الحالات والتمارين والبروتوكولات
+                      </p>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Full Name */}
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-slate-300 font-semibold flex items-center gap-1.5">
+                    <User className="w-3.5 h-3.5 text-slate-400" />
+                    <span>الاسم الكامل</span>
+                  </Label>
+                  <Input
+                    type="text"
+                    required
+                    placeholder="مثال: كابتن يوسف أحمد"
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    className="bg-slate-800/80 border-slate-700 text-white text-xs rounded-xl h-11 placeholder:text-slate-500 focus:border-emerald-500"
                   />
-                  <path
-                    fill="#FBBC05"
-                    d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+                </div>
+
+                {/* Sign Up Email */}
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-slate-300 font-semibold flex items-center gap-1.5">
+                    <Mail className="w-3.5 h-3.5 text-slate-400" />
+                    <span>البريد الإلكتروني</span>
+                  </Label>
+                  <Input
+                    type="email"
+                    required
+                    placeholder="name@example.com"
+                    value={signUpEmail}
+                    onChange={(e) => setSignUpEmail(e.target.value)}
+                    className="bg-slate-800/80 border-slate-700 text-white text-xs text-left dir-ltr rounded-xl h-11 placeholder:text-slate-500 focus:border-emerald-500"
                   />
-                  <path
-                    fill="#EA4335"
-                    d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-                  />
-                </svg>
-                <span>المتابعة باستخدام Google / Gmail</span>
-              </Button>
-            </div>
+                </div>
 
-            <div className="relative flex items-center justify-center my-3">
-              <div className="border-t border-slate-800 w-full" />
-              <span className="bg-slate-900 px-3 text-[11px] text-slate-500 font-medium">أو عبر البريد الإلكتروني</span>
-              <div className="border-t border-slate-800 w-full" />
-            </div>
+                {/* Admin Verification Info or Invite Code */}
+                {accountType === "ADMIN" && (
+                  isPreauthorizedAdminEmail ? (
+                    <div className="p-2.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[11px] flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+                      <span>
+                        بريد إدارة معتمد — يمكنك تعيين كلمة المرور مباشرة بدون كود
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      <Label className="text-xs text-amber-300 font-semibold flex items-center gap-1.5">
+                        <KeyRound className="w-3.5 h-3.5 text-amber-400" />
+                        <span>كود تفعيل الإدارة (Admin Code)</span>
+                      </Label>
+                      <Input
+                        type="text"
+                        required
+                        placeholder="أدخل كود تفعيل الإدارة"
+                        value={adminCode}
+                        onChange={(e) => setAdminCode(e.target.value)}
+                        className="bg-slate-800/80 border-amber-500/40 text-white text-xs text-left dir-ltr rounded-xl h-11 placeholder:text-slate-500 focus:border-amber-400"
+                      />
+                    </div>
+                  )
+                )}
 
-            {/* Standard Email & Password Form */}
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="space-y-1.5">
-                <Label className="text-xs text-slate-300 font-semibold flex items-center gap-1.5">
-                  <Mail className="w-3.5 h-3.5 text-slate-400" />
-                  <span>البريد الإلكتروني</span>
-                </Label>
-                <Input
-                  type="email"
-                  required
-                  placeholder="name@gmail.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="bg-slate-800/80 border-slate-700 text-white text-xs text-left dir-ltr rounded-xl h-11 placeholder:text-slate-500 focus:border-emerald-500"
-                />
-              </div>
+                {/* Password */}
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-slate-300 font-semibold flex items-center gap-1.5">
+                    <Lock className="w-3.5 h-3.5 text-slate-400" />
+                    <span>كلمة المرور (6 أحرف على الأقل)</span>
+                  </Label>
+                  <div className="relative">
+                    <Input
+                      type={showSignUpPassword ? "text" : "password"}
+                      required
+                      minLength={6}
+                      placeholder="••••••••"
+                      value={signUpPassword}
+                      onChange={(e) => setSignUpPassword(e.target.value)}
+                      className="bg-slate-800/80 border-slate-700 text-white text-xs text-left dir-ltr rounded-xl h-11 pl-10 placeholder:text-slate-500 focus:border-emerald-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowSignUpPassword((v) => !v)}
+                      aria-label={
+                        showSignUpPassword ? "إخفاء كلمة المرور" : "إظهار كلمة المرور"
+                      }
+                      className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white transition"
+                    >
+                      {showSignUpPassword ? (
+                        <EyeOff className="w-4 h-4" />
+                      ) : (
+                        <Eye className="w-4 h-4" />
+                      )}
+                    </button>
+                  </div>
+                </div>
 
-              <div className="space-y-1.5">
-                <Label className="text-xs text-slate-300 font-semibold flex items-center gap-1.5">
-                  <Lock className="w-3.5 h-3.5 text-slate-400" />
-                  <span>كلمة المرور</span>
-                </Label>
-                <Input
-                  type="password"
-                  required
-                  placeholder="••••••••"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="bg-slate-800/80 border-slate-700 text-white text-xs text-left dir-ltr rounded-xl h-11 placeholder:text-slate-500 focus:border-emerald-500"
-                />
-              </div>
+                {/* Confirm Password */}
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-slate-300 font-semibold flex items-center gap-1.5">
+                    <Lock className="w-3.5 h-3.5 text-slate-400" />
+                    <span>تأكيد كلمة المرور</span>
+                  </Label>
+                  <div className="relative">
+                    <Input
+                      type={showConfirmPassword ? "text" : "password"}
+                      required
+                      minLength={6}
+                      placeholder="••••••••"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      className={cn(
+                        "bg-slate-800/80 text-white text-xs text-left dir-ltr rounded-xl h-11 pl-10 placeholder:text-slate-500",
+                        passwordMismatch
+                          ? "border-rose-500 focus:border-rose-500"
+                          : "border-slate-700 focus:border-emerald-500"
+                      )}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowConfirmPassword((v) => !v)}
+                      aria-label={
+                        showConfirmPassword ? "إخفاء كلمة المرور" : "إظهار كلمة المرور"
+                      }
+                      className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white transition"
+                    >
+                      {showConfirmPassword ? (
+                        <EyeOff className="w-4 h-4" />
+                      ) : (
+                        <Eye className="w-4 h-4" />
+                      )}
+                    </button>
+                  </div>
+                  {passwordMismatch && (
+                    <p className="text-[11px] text-rose-400">
+                      كلمتا المرور غير متطابقتين.
+                    </p>
+                  )}
+                </div>
 
-              <Button
-                type="submit"
-                disabled={isLoading || !email.trim() || !password.trim()}
-                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs h-11 rounded-xl shadow-md shadow-emerald-600/20 transition-all"
-              >
-                {isLoading ? "جاري التحقق..." : "تسجيل الدخول"}
-              </Button>
-            </form>
+                <Button
+                  type="submit"
+                  disabled={
+                    isLoading ||
+                    fullName.trim().length < 2 ||
+                    !signUpEmail.trim() ||
+                    signUpPassword.length < 6 ||
+                    passwordMismatch
+                  }
+                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs h-11 rounded-xl shadow-md shadow-emerald-600/20 transition-all"
+                >
+                  {isLoading
+                    ? "جاري إنشاء الحساب..."
+                    : "إنشاء الحساب وتسجيل الدخول"}
+                </Button>
 
+                <p className="text-center text-[11px] text-slate-400 pt-1">
+                  لديك حساب بالفعل؟{" "}
+                  <button
+                    type="button"
+                    onClick={() => switchMode("signin")}
+                    className="text-emerald-400 hover:underline font-bold"
+                  >
+                    تسجيل الدخول
+                  </button>
+                </p>
+              </form>
+            )}
           </CardContent>
 
           <CardFooter className="pt-0 justify-between text-xs text-slate-500 border-t border-slate-800/80 px-6 py-3">
-            <Link href="/" className="hover:text-emerald-400 flex items-center gap-1 transition">
+            <Link
+              href="/"
+              className="hover:text-emerald-400 flex items-center gap-1 transition"
+            >
               <span>تصفح كزائر</span>
               <ArrowRight className="w-3.5 h-3.5" />
             </Link>
@@ -239,7 +606,6 @@ export default function LoginPage() {
             </Link>
           </CardFooter>
         </Card>
-
       </div>
     </div>
   );

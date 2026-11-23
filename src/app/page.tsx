@@ -80,7 +80,7 @@ interface ExerciseItem {
 }
 
 export default function HomePage() {
-  const { user, isAdmin, loginAsAdmin } = useAuth();
+  const { isAdmin } = useAuth();
 
   if (!isAdmin) {
     return <ContactPage />;

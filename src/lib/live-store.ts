@@ -1302,4 +1302,107 @@ export async function saveLiveVideoAnalysisAsync(analysis: Partial<LiveVideoAnal
   return complete;
 }
 
+// ──────────────────────────────────────────────
+// REGISTERED AUTH ACCOUNTS (PASSWORD + ROLE)
+// ──────────────────────────────────────────────
+
+export interface LiveAuthAccount {
+  id: string;
+  name: string;
+  email: string;
+  role: "ADMIN" | "CLIENT" | "PATIENT" | "PHYSIOTHERAPIST";
+  passwordHash: string;
+  salt: string;
+  avatarUrl?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+let memoryAuthUsers: LiveAuthAccount[] = [];
+let authUsersLoadedFromFile = false;
+
+export function getLiveAuthUsers(): LiveAuthAccount[] {
+  if (!authUsersLoadedFromFile) {
+    const raw = safeReadFile("auth_users.json");
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          memoryAuthUsers = parsed as LiveAuthAccount[];
+        }
+      } catch {
+        // Fallback to empty array on corrupt JSON
+      }
+    }
+    authUsersLoadedFromFile = true;
+  }
+  return [...memoryAuthUsers];
+}
+
+export async function getLiveAuthUsersAsync(): Promise<LiveAuthAccount[]> {
+  try {
+    const kv = await getCloudflareKV();
+    if (kv) {
+      const data = await kv.get("auth_users", "json");
+      if (Array.isArray(data)) {
+        memoryAuthUsers = data as LiveAuthAccount[];
+        authUsersLoadedFromFile = true;
+        return [...memoryAuthUsers];
+      }
+    }
+  } catch (err) {
+    console.warn("KV get auth_users skipped:", err);
+  }
+  return getLiveAuthUsers();
+}
+
+export async function findLiveAuthUserByEmailAsync(
+  email: string
+): Promise<LiveAuthAccount | null> {
+  const normalized = email.toLowerCase().trim();
+  if (!normalized) return null;
+  const users = await getLiveAuthUsersAsync();
+  return (
+    users.find((u) => u.email.toLowerCase().trim() === normalized) || null
+  );
+}
+
+export async function saveLiveAuthUserAsync(
+  account: LiveAuthAccount
+): Promise<LiveAuthAccount> {
+  await getLiveAuthUsersAsync();
+  const normalizedEmail = account.email.toLowerCase().trim();
+  const now = new Date().toISOString();
+
+  const normalizedAccount: LiveAuthAccount = {
+    ...account,
+    email: normalizedEmail,
+    updatedAt: account.updatedAt || now,
+    createdAt: account.createdAt || now,
+  };
+
+  const existingIdx = memoryAuthUsers.findIndex(
+    (u) => u.email.toLowerCase().trim() === normalizedEmail
+  );
+  if (existingIdx >= 0) {
+    memoryAuthUsers[existingIdx] = normalizedAccount;
+  } else {
+    memoryAuthUsers.unshift(normalizedAccount);
+  }
+
+  safeWriteFile("auth_users.json", JSON.stringify(memoryAuthUsers, null, 2));
+
+  try {
+    const kv = await getCloudflareKV();
+    if (kv) {
+      await kv.put("auth_users", JSON.stringify(memoryAuthUsers));
+    }
+  } catch (err) {
+    console.warn("KV put auth_users skipped:", err);
+  }
+
+  return normalizedAccount;
+}
+
+
 
