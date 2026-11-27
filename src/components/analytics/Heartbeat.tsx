@@ -1,38 +1,55 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
+import { usePathname } from "next/navigation";
+import { useAuth } from "@/lib/auth-context";
+import {
+  PresenceController,
+  startLivePresenceSession,
+} from "@/lib/presenceService";
 
 export function AnalyticsHeartbeat() {
+  const pathname = usePathname() || "/";
+  const { user, isLoading } = useAuth();
+  const presenceRef = useRef<PresenceController | null>(null);
+  const initialPathRef = useRef<string>(pathname);
+  initialPathRef.current = pathname;
+
+  // Single tab-lifetime presence controller (never torn down on auth or route change)
   useEffect(() => {
-    // Get cookies from document (non-httponly backup check)
-    const getCookieValue = (name: string) => {
-      const match = document.cookie.match(new RegExp("(^| )" + name + "=([^;]+)"));
-      return match ? match[2] : null;
+    presenceRef.current = startLivePresenceSession({
+      uid: user?.id || null,
+      email: user?.email || null,
+      displayName: user?.name || (user?.id ? "مستخدم مسجل" : "زائر"),
+      role: user?.role || "GUEST",
+      initialPath: initialPathRef.current,
+    });
+
+    return () => {
+      presenceRef.current?.teardown();
+      presenceRef.current = null;
     };
-
-    const sendHeartbeat = () => {
-      const visitorId = getCookieValue("pm_vid") || "anonymous";
-      const sessionId = getCookieValue("pm_sid") || "";
-
-      fetch("/api/analytics/heartbeat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          visitorId,
-          sessionId,
-          page: window.location.pathname,
-        }),
-      }).catch(() => {});
-    };
-
-    // Send initial heartbeat
-    sendHeartbeat();
-
-    // Send heartbeat every 60 seconds
-    const interval = setInterval(sendHeartbeat, 60000);
-
-    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Re-sync identity seamlessly when session finishes loading or user logs in/out
+  useEffect(() => {
+    if (isLoading) return;
+    presenceRef.current?.syncIdentity({
+      uid: user?.id || null,
+      email: user?.email || null,
+      displayName: user?.name || (user?.id ? "مستخدم مسجل" : "زائر"),
+      role: user?.role || "GUEST",
+    });
+  }, [user?.id, user?.email, user?.name, user?.role, isLoading]);
+
+  // Update active route / clinic module immediately on navigation
+  useEffect(() => {
+    presenceRef.current?.updateActivity(
+      pathname,
+      user?.name || (user?.id ? "مستخدم مسجل" : "زائر")
+    );
+  }, [pathname, user?.id, user?.name]);
 
   return null;
 }

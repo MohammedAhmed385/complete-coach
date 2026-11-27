@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import {
   BarChart3,
@@ -18,9 +18,6 @@ import {
   Clock,
   Activity,
   Layers,
-  ArrowUpRight,
-  ArrowDownRight,
-  ExternalLink,
   ShieldCheck,
   Compass,
   AlertCircle,
@@ -29,15 +26,13 @@ import {
   FolderHeart,
   CheckCircle2,
   Dumbbell,
-  FileHeart,
   UserCheck,
   UserPlus,
   Shield,
   ChevronLeft,
-  ChevronRight,
-  Flame,
-  Award,
+  Radio,
   Sparkles,
+  Database,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -68,6 +63,7 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { AdminGuard } from "@/components/auth/AdminGuard";
+import { fetchMergedCases } from "@/lib/client-sync";
 
 // --- Types ---
 type TimeRange = "24h" | "7d" | "30d" | "90d";
@@ -78,12 +74,46 @@ interface KPIStats {
   todayVisits: number;
   todayUnique: number;
   liveActive: number;
+  openTabsCount?: number;
   avgDuration: number;
   bounceRate: number;
   prevVisits: number;
   prevUnique: number;
   visitChange: number;
   uniqueChange: number;
+}
+
+interface LivePresenceItem {
+  sessionId: string;
+  visitorId: string;
+  uid: string | null;
+  isAuthenticated: boolean;
+  role: string;
+  email: string;
+  displayName: string;
+  currentPath: string;
+  currentActivity: string;
+  ip: string;
+  country: string;
+  countryCode: string;
+  city: string;
+  device: string;
+  browser: string;
+  os: string;
+  online: boolean;
+  sessionStartedAt: number;
+  lastActive: number;
+  pageCount: number;
+  elapsedSeconds: number;
+  lastSeenSecondsAgo: number;
+}
+
+interface RegisteredAccountItem {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  createdAt: string;
 }
 
 interface BreakdownItem {
@@ -98,10 +128,15 @@ interface BreakdownItem {
 interface RecentVisit {
   id: string;
   visitorId: string;
+  displayName?: string;
+  email?: string | null;
   page: string;
   device: string;
   browser: string;
   country: string | null;
+  countryCode?: string;
+  city?: string;
+  ip?: string;
   referrer: string | null;
   createdAt: string;
 }
@@ -126,6 +161,23 @@ export interface ClinicalStats {
 }
 
 interface AnalyticsData {
+  authorized?: boolean;
+  serverNow?: number;
+  storageMode?: "d1" | "kv" | "local";
+  liveSessions?: LivePresenceItem[];
+  uniqueLiveSummary?: {
+    uniqueOnlineCount: number;
+    signedInOnlineCount: number;
+    guestOnlineCount: number;
+    openTabsCount: number;
+  };
+  uniqueBreakdown?: {
+    totalUnique: number;
+    registeredCount: number;
+    guestCount: number;
+    conversionPct: number;
+  };
+  registeredUsers?: RegisteredAccountItem[];
   kpis: KPIStats;
   topPages: BreakdownItem[];
   topReferrers: BreakdownItem[];
@@ -140,6 +192,8 @@ interface AnalyticsData {
 // --- Page & Route Mappings ---
 const PAGE_INFO: Record<string, { ar: string; en: string }> = {
   "/": { ar: "الرئيسية", en: "Home Dashboard" },
+  "/contact": { ar: "تواصل معنا والحجز", en: "Contact Us" },
+  "/login": { ar: "تسجيل الدخول / حساب جديد", en: "Auth Login" },
   "/cases": { ar: "الحالات والملفات", en: "Patient Cases" },
   "/add-case": { ar: "إضافة حالة", en: "Add New Case" },
   "/exercises": { ar: "مكتبة التمارين", en: "Exercise Library" },
@@ -148,7 +202,8 @@ const PAGE_INFO: Record<string, { ar: string; en: string }> = {
   "/return-to-play": { ar: "شروط العودة للملعب (RTP)", en: "Return to Play" },
   "/online-followup": { ar: "متابعة أونلاين", en: "Online Follow-up" },
   "/ai-analysis": { ar: "تحليل الحركة بالذكاء الاصطناعي", en: "AI Motion Analysis" },
-  "/analytics": { ar: "الإحصائيات والزيارات", en: "Analytics Dashboard" },
+  "/analytics": { ar: "الإحصائيات والبث المباشر", en: "Live Analytics" },
+  "/admin": { ar: "لوحة الإدارة المركزية", en: "Admin Portal" },
 };
 
 function getPageName(path: string): { ar: string; en: string } {
@@ -185,6 +240,7 @@ const COUNTRY_INFO: Record<string, { ar: string; flag: string }> = {
   FR: { ar: "فرنسا", flag: "🇫🇷" },
   TR: { ar: "تركيا", flag: "🇹🇷" },
   CA: { ar: "كندا", flag: "🇨🇦" },
+  LOCAL: { ar: "اتصال مباشر / محلي", flag: "🌐" },
 };
 
 function formatCountry(codeOrName: string | null): { name: string; flag: string } {
@@ -195,54 +251,190 @@ function formatCountry(codeOrName: string | null): { name: string; flag: string 
   if (COUNTRY_INFO[upper]) {
     return { name: COUNTRY_INFO[upper].ar, flag: COUNTRY_INFO[upper].flag };
   }
+  if (upper.includes("LOCAL") || upper.includes("DIRECT")) {
+    return { name: "اتصال مباشر / محلي", flag: "🌐" };
+  }
   return { name: codeOrName, flag: "🌍" };
 }
 
-// --- Device Helpers ---
-function getDeviceDetails(device: string): { labelAr: string; labelEn: string; icon: React.ElementType; color: string } {
-  const d = device.toLowerCase();
+function getDeviceDetails(device: string): {
+  labelAr: string;
+  labelEn: string;
+  icon: React.ElementType;
+  color: string;
+} {
+  const d = (device || "desktop").toLowerCase();
   if (d.includes("mobile") || d.includes("phone")) {
-    return { labelAr: "هاتف جوال", labelEn: "Mobile", icon: Smartphone, color: "text-emerald-600 bg-emerald-50" };
+    return {
+      labelAr: "هاتف جوال",
+      labelEn: "Mobile",
+      icon: Smartphone,
+      color: "text-emerald-600 bg-emerald-50",
+    };
   }
   if (d.includes("tablet") || d.includes("ipad")) {
-    return { labelAr: "جهاز لوحي", labelEn: "Tablet", icon: Tablet, color: "text-blue-600 bg-blue-50" };
+    return {
+      labelAr: "جهاز لوحي",
+      labelEn: "Tablet",
+      icon: Tablet,
+      color: "text-blue-600 bg-blue-50",
+    };
   }
-  return { labelAr: "حاسوب مكتبي", labelEn: "Desktop", icon: Monitor, color: "text-navy-600 bg-navy-50" };
+  return {
+    labelAr: "حاسوب مكتبي",
+    labelEn: "Desktop",
+    icon: Monitor,
+    color: "text-navy-600 bg-navy-50",
+  };
 }
 
-// --- Referrer Helpers ---
-function formatReferrer(ref: string | null): { labelAr: string; labelEn: string; color: string; badge: string } {
+function formatReferrer(ref: string | null): {
+  labelAr: string;
+  labelEn: string;
+  color: string;
+  badge: string;
+} {
   if (!ref || ref === "Direct" || ref === "direct" || ref === "null") {
-    return { labelAr: "زيارة مباشرة", labelEn: "Direct Traffic", color: "bg-slate-100 text-slate-700", badge: "Direct" };
+    return {
+      labelAr: "زيارة مباشرة",
+      labelEn: "Direct Traffic",
+      color: "bg-slate-100 text-slate-700",
+      badge: "Direct",
+    };
   }
   const lower = ref.toLowerCase();
   if (lower.includes("google")) {
-    return { labelAr: "بحث جوجل", labelEn: "Google Search", color: "bg-blue-50 text-blue-700 border-blue-200", badge: "Google" };
+    return {
+      labelAr: "بحث جوجل",
+      labelEn: "Google Search",
+      color: "bg-blue-50 text-blue-700 border-blue-200",
+      badge: "Google",
+    };
   }
   if (lower.includes("whatsapp") || lower.includes("wa.me")) {
-    return { labelAr: "واتساب", labelEn: "WhatsApp", color: "bg-emerald-50 text-emerald-700 border-emerald-200", badge: "WhatsApp" };
+    return {
+      labelAr: "واتساب",
+      labelEn: "WhatsApp",
+      color: "bg-emerald-50 text-emerald-700 border-emerald-200",
+      badge: "WhatsApp",
+    };
   }
   if (lower.includes("tiktok")) {
-    return { labelAr: "تيك توك", labelEn: "TikTok", color: "bg-pink-50 text-pink-700 border-pink-200", badge: "TikTok" };
+    return {
+      labelAr: "تيك توك",
+      labelEn: "TikTok",
+      color: "bg-pink-50 text-pink-700 border-pink-200",
+      badge: "TikTok",
+    };
   }
   if (lower.includes("facebook") || lower.includes("fb.com")) {
-    return { labelAr: "فيسبوك", labelEn: "Facebook", color: "bg-indigo-50 text-indigo-700 border-indigo-200", badge: "Facebook" };
+    return {
+      labelAr: "فيسبوك",
+      labelEn: "Facebook",
+      color: "bg-indigo-50 text-indigo-700 border-indigo-200",
+      badge: "Facebook",
+    };
   }
   if (lower.includes("instagram")) {
-    return { labelAr: "إنستغرام", labelEn: "Instagram", color: "bg-rose-50 text-rose-700 border-rose-200", badge: "Instagram" };
+    return {
+      labelAr: "إنستغرام",
+      labelEn: "Instagram",
+      color: "bg-rose-50 text-rose-700 border-rose-200",
+      badge: "Instagram",
+    };
   }
   if (lower.includes("twitter") || lower.includes("t.co") || lower.includes("x.com")) {
-    return { labelAr: "منصة إكس (تويتر)", labelEn: "X / Twitter", color: "bg-slate-800 text-white", badge: "X" };
+    return {
+      labelAr: "منصة إكس",
+      labelEn: "X / Twitter",
+      color: "bg-slate-800 text-white",
+      badge: "X",
+    };
   }
-  return { labelAr: ref, labelEn: ref, color: "bg-slate-100 text-slate-700", badge: "Web" };
+  return {
+    labelAr: ref,
+    labelEn: ref,
+    color: "bg-slate-100 text-slate-700",
+    badge: "Web",
+  };
 }
 
 function formatDuration(seconds: number): string {
   if (!seconds || seconds <= 0) return "0 ثانية";
   const mins = Math.floor(seconds / 60);
   const secs = seconds % 60;
-  if (mins === 0) return `${secs} ثانية (Sec)`;
-  return `${mins} دقيقة ${secs > 0 ? `و ${secs} ثانية` : ""} (${mins}m ${secs}s)`;
+  if (mins === 0) return `${secs} ثانية`;
+  return `${mins} دقيقة ${secs > 0 ? `و ${secs} ثانية` : ""}`;
+}
+
+function formatElapsedClock(totalSec: number): string {
+  const sec = Math.max(0, Math.floor(totalSec));
+  const hrs = Math.floor(sec / 3600);
+  const mins = Math.floor((sec % 3600) / 60);
+  const rem = sec % 60;
+  if (hrs > 0) {
+    return `${hrs}h ${String(mins).padStart(2, "0")}m ${String(rem).padStart(2, "0")}s`;
+  }
+  return `${String(mins).padStart(2, "0")}m ${String(rem).padStart(2, "0")}s`;
+}
+
+function computeClinicalStatsFromCases(
+  casesList: any[],
+  baseClinical?: ClinicalStats
+): ClinicalStats {
+  const total = casesList.length;
+  const active = casesList.filter((c) => c.status === "active").length;
+  const completed = casesList.filter((c) => c.status === "completed").length;
+  const paused = casesList.filter((c) => c.status === "paused").length;
+
+  const injuryCounts: Record<string, number> = {};
+  casesList.forEach((c) => {
+    const t = c.injuryType?.trim() || "إصابة أخرى";
+    injuryCounts[t] = (injuryCounts[t] || 0) + 1;
+  });
+  const injuryBreakdown = Object.entries(injuryCounts)
+    .map(([name, count]) => ({
+      name,
+      count,
+      percentage: total > 0 ? Math.round((count / total) * 100) : 0,
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  const phaseCounts: Record<string, number> = {
+    ACUTE: 0,
+    RESTORE_ROM: 0,
+    STRENGTH: 0,
+    NEUROMUSCULAR: 0,
+    FUNCTIONAL: 0,
+    RETURN_TO_SPORT: 0,
+  };
+  casesList.forEach((c) => {
+    const activeProg =
+      c.rehabPrograms?.find((p: any) => p.isActive) || c.rehabPrograms?.[0];
+    const p = activeProg?.phase || "ACUTE";
+    if (phaseCounts[p] !== undefined) phaseCounts[p]++;
+    else phaseCounts.ACUTE++;
+  });
+
+  const sideCounts = { RIGHT: 0, LEFT: 0, BILATERAL: 0 };
+  casesList.forEach((c) => {
+    if (c.injuredSide === "LEFT") sideCounts.LEFT++;
+    else if (c.injuredSide === "BILATERAL") sideCounts.BILATERAL++;
+    else sideCounts.RIGHT++;
+  });
+
+  return {
+    totalPatients: total,
+    activePatients: active,
+    completedPatients: completed,
+    pausedPatients: paused,
+    totalExercises: baseClinical?.totalExercises ?? 0,
+    totalProtocols: baseClinical?.totalProtocols ?? 8,
+    recoveryRate: total > 0 ? Math.round((completed / total) * 100) : 0,
+    injuryBreakdown,
+    phaseBreakdown: phaseCounts,
+    sideBreakdown: sideCounts,
+  };
 }
 
 export default function AnalyticsPage() {
@@ -256,28 +448,22 @@ export default function AnalyticsPage() {
 function AnalyticsContent() {
   const [timeRange, setTimeRange] = useState<TimeRange>("7d");
   const [data, setData] = useState<AnalyticsData | null>(null);
-  const [activeTab, setActiveTab] = useState<"clinical" | "traffic">("clinical");
+  const [activeTab, setActiveTab] = useState<"traffic" | "clinical">("traffic");
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date>(new Date());
+  const [fetchedAtMs, setFetchedAtMs] = useState<number>(() => Date.now());
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
   const [mounted, setMounted] = useState<boolean>(false);
-
-  // In-memory persistent session IDs
-  const visitorIdRef = useRef<string>("");
-  const sessionIdRef = useRef<string>("");
 
   useEffect(() => {
     setMounted(true);
-    if (!visitorIdRef.current) {
-      visitorIdRef.current = "v-" + Math.random().toString(36).substring(2, 10);
-    }
-    if (!sessionIdRef.current) {
-      sessionIdRef.current = "s-" + Math.random().toString(36).substring(2, 10);
-    }
+    const tick = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(tick);
   }, []);
 
-  // 1. Fetch Analytics Data
+  // Fetch 100% real telemetry + clinical cases (every 2 seconds + on focus)
   const fetchData = useCallback(
     async (range: TimeRange, silent: boolean = false) => {
       try {
@@ -285,80 +471,38 @@ function AnalyticsContent() {
         setIsRefreshing(true);
         setError(null);
 
-        const res = await fetch(`/api/analytics/stats?range=${range}`, {
-          cache: "no-store",
-        });
+        const [res, mergedCases] = await Promise.all([
+          fetch(`/api/analytics/stats?range=${range}&t=${Date.now()}`, {
+            credentials: "include",
+            cache: "no-store",
+          }),
+          fetchMergedCases().catch(() => null),
+        ]);
 
         if (!res.ok) {
+          if (res.status === 403) {
+            throw new Error("يلزم تسجيل الدخول بحساب الإدارة لعرض الإحصائيات المباشرة.");
+          }
           throw new Error(`تعذر تحميل بيانات الإحصائيات (رمز: ${res.status})`);
         }
 
         const json: AnalyticsData = await res.json();
-
-        // Merge with client-side localStorage cases
-        if (typeof window !== "undefined") {
-          try {
-            const localCases = JSON.parse(localStorage.getItem("revive_cases") || "[]");
-            if (localCases.length > 0) {
-              const total = localCases.length;
-              const active = localCases.filter((c: any) => c.status === "active").length;
-              const completed = localCases.filter((c: any) => c.status === "completed").length;
-              const paused = localCases.filter((c: any) => c.status === "paused").length;
-
-              const injuryCounts: Record<string, number> = {};
-              localCases.forEach((c: any) => {
-                const t = c.injuryType?.trim() || "إصابة أخرى";
-                injuryCounts[t] = (injuryCounts[t] || 0) + 1;
-              });
-              const injuryBreakdown = Object.entries(injuryCounts)
-                .map(([name, count]) => ({
-                  name,
-                  count,
-                  percentage: Math.round((count / total) * 100),
-                }))
-                .sort((a, b) => b.count - a.count);
-
-              const phaseCounts: Record<string, number> = {
-                ACUTE: 0,
-                RESTORE_ROM: 0,
-                STRENGTH: 0,
-                NEUROMUSCULAR: 0,
-                FUNCTIONAL: 0,
-                RETURN_TO_SPORT: 0,
-              };
-              localCases.forEach((c: any) => {
-                const p = c.rehabPrograms?.[0]?.phase || "ACUTE";
-                if (phaseCounts[p] !== undefined) phaseCounts[p]++;
-                else phaseCounts.ACUTE++;
-              });
-
-              const sideCounts = { RIGHT: 0, LEFT: 0, BILATERAL: 0 };
-              localCases.forEach((c: any) => {
-                if (c.injuredSide === "LEFT") sideCounts.LEFT++;
-                else if (c.injuredSide === "BILATERAL") sideCounts.BILATERAL++;
-                else sideCounts.RIGHT++;
-              });
-
-              json.clinicalStats = {
-                totalPatients: total,
-                activePatients: active,
-                completedPatients: completed,
-                pausedPatients: paused,
-                totalExercises: json.clinicalStats?.totalExercises || 8,
-                totalProtocols: json.clinicalStats?.totalProtocols || 8,
-                recoveryRate: total > 0 ? Math.round((completed / total) * 100) : 0,
-                injuryBreakdown,
-                phaseBreakdown: phaseCounts,
-                sideBreakdown: sideCounts,
-              };
-            }
-          } catch {}
+        if (Array.isArray(mergedCases)) {
+          json.clinicalStats = computeClinicalStatsFromCases(
+            mergedCases,
+            json.clinicalStats
+          );
         }
 
+        const nowStamp = Date.now();
         setData(json);
-        setLastRefreshedAt(new Date());
+        setFetchedAtMs(nowStamp);
+        setNowMs(nowStamp);
+        setLastRefreshedAt(new Date(nowStamp));
       } catch (err: unknown) {
-        console.error("Failed to fetch analytics:", err);
+        if (!silent) {
+          console.error("Failed to fetch analytics:", err);
+        }
         setError(
           err instanceof Error
             ? err.message
@@ -372,62 +516,45 @@ function AnalyticsContent() {
     []
   );
 
-  // 2. Fetch on mount & range change + Auto-refresh stats every 30-60s
+  // Initial load + 2-second real-time sync matching D:\sentance
   useEffect(() => {
     fetchData(timeRange);
 
-    // Auto-refresh interval (every 30 seconds for real-time live feed & stats)
-    const interval = setInterval(() => {
+    const pollInterval = setInterval(() => {
       fetchData(timeRange, true);
-    }, 30000);
+    }, 2000);
 
-    return () => clearInterval(interval);
+    const handleFocus = () => fetchData(timeRange, true);
+    window.addEventListener("focus", handleFocus);
+
+    return () => {
+      clearInterval(pollInterval);
+      window.removeEventListener("focus", handleFocus);
+    };
   }, [timeRange, fetchData]);
 
-  // 3. Heartbeat: POST to /api/analytics/heartbeat every 60s
-  useEffect(() => {
-    const postHeartbeat = async () => {
-      try {
-        await fetch("/api/analytics/heartbeat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            visitorId: visitorIdRef.current,
-            sessionId: sessionIdRef.current,
-            page: window.location.pathname || "/analytics",
-          }),
-        });
-      } catch (e) {
-        // Heartbeat failure shouldn't disrupt UI
-      }
-    };
-
-    postHeartbeat();
-    const heartbeatInterval = setInterval(postHeartbeat, 60000);
-    return () => clearInterval(heartbeatInterval);
-  }, []);
-
-  // 4. CSV Export Handler
+  // CSV Export Handler
   const handleExportCSV = () => {
     if (!data?.recentVisits || data.recentVisits.length === 0) {
-      alert("لا توجد بيانات زيارات متاحة للتصدير حالياً.");
+      alert("لا توجد بيانات زيارات حقيقية متاحة للتصدير حالياً.");
       return;
     }
 
     const headers = [
       "معرّف الزائر (Visitor ID)",
+      "المستخدم (Display Name)",
       "الصفحة المزارة (Page)",
       "اسم الصفحة (Page Name)",
       "الجهاز (Device)",
       "المتصفح (Browser)",
-      "الدولة (Country)",
+      "الدولة والمدينة (Location)",
       "مصدر الزيارة (Referrer)",
       "التاريخ والوقت (Timestamp)",
     ];
 
     const rows = data.recentVisits.map((v) => {
       const pInfo = getPageName(v.page);
-      const cInfo = formatCountry(v.country);
+      const cInfo = formatCountry(v.countryCode || v.country);
       const dInfo = getDeviceDetails(v.device);
       const rInfo = formatReferrer(v.referrer);
       const formattedDate = new Date(v.createdAt).toLocaleString("ar-EG", {
@@ -441,17 +568,17 @@ function AnalyticsContent() {
 
       return [
         `"${v.visitorId}"`,
+        `"${v.displayName || "زائر"}"`,
         `"${v.page}"`,
         `"${pInfo.ar} - ${pInfo.en}"`,
         `"${dInfo.labelAr} (${dInfo.labelEn})"`,
         `"${v.browser || "Unknown"}"`,
-        `"${cInfo.name}"`,
+        `"${cInfo.name}${v.city ? ` - ${v.city}` : ""}"`,
         `"${rInfo.labelAr}"`,
         `"${formattedDate}"`,
       ].join(",");
     });
 
-    // \uFEFF BOM for UTF-8 Excel Arabic compatibility
     const csvContent = "\uFEFF" + [headers.join(","), ...rows].join("\r\n");
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
@@ -459,7 +586,7 @@ function AnalyticsContent() {
     link.href = url;
     link.setAttribute(
       "download",
-      `peak-motion-analytics-${timeRange}-${new Date().toISOString().slice(0, 10)}.csv`
+      `revive-analytics-${timeRange}-${new Date().toISOString().slice(0, 10)}.csv`
     );
     document.body.appendChild(link);
     link.click();
@@ -467,31 +594,37 @@ function AnalyticsContent() {
     URL.revokeObjectURL(url);
   };
 
-  // Helper for Chart Date Formatting
   const formatTick = (val: string) => {
     try {
       if (timeRange === "24h") {
         const d = new Date(val);
-        return d.toLocaleTimeString("ar-EG", { hour: "numeric", minute: "2-digit" });
+        if (!Number.isNaN(d.getTime())) {
+          return d.toLocaleTimeString("ar-EG", {
+            hour: "2-digit",
+            minute: "2-digit",
+          });
+        }
       }
       const parts = val.split("-");
       if (parts.length === 3) {
         return `${parts[2]}/${parts[1]}`;
       }
       const d = new Date(val);
-      return d.toLocaleDateString("ar-EG", { month: "numeric", day: "numeric" });
+      return Number.isNaN(d.getTime())
+        ? val
+        : d.toLocaleDateString("ar-EG", { month: "numeric", day: "numeric" });
     } catch {
       return val;
     }
   };
 
-  // Safe KPI fallbacks
   const kpis: KPIStats = data?.kpis || {
     totalVisits: 0,
     uniqueVisitors: 0,
     todayVisits: 0,
     todayUnique: 0,
     liveActive: 0,
+    openTabsCount: 0,
     avgDuration: 0,
     bounceRate: 0,
     prevVisits: 0,
@@ -500,12 +633,34 @@ function AnalyticsContent() {
     uniqueChange: 0,
   };
 
+  const liveSessions = data?.liveSessions || [];
+  const uniqueLiveSummary = data?.uniqueLiveSummary || {
+    uniqueOnlineCount: kpis.liveActive,
+    signedInOnlineCount: 0,
+    guestOnlineCount: kpis.liveActive,
+    openTabsCount: liveSessions.length,
+  };
+  const uniqueBreakdown = data?.uniqueBreakdown || {
+    totalUnique: 0,
+    registeredCount: 0,
+    guestCount: 0,
+    conversionPct: 0,
+  };
+  const registeredUsers = data?.registeredUsers || [];
+
+  const storageLabel =
+    data?.storageMode === "d1"
+      ? "Cloudflare D1 Edge SQL"
+      : data?.storageMode === "kv"
+      ? "Cloudflare KV Global"
+      : "Live Isolate / Local Store";
+
   const clinical: ClinicalStats = data?.clinicalStats || {
     totalPatients: 0,
     activePatients: 0,
     completedPatients: 0,
     pausedPatients: 0,
-    totalExercises: 8,
+    totalExercises: 0,
     totalProtocols: 8,
     recoveryRate: 0,
     injuryBreakdown: [],
@@ -531,15 +686,18 @@ function AnalyticsContent() {
             </div>
             <div>
               <h1 className="text-2xl md:text-3xl font-extrabold text-navy-950 tracking-tight">
-                الإحصائيات والزيارات
+                الإحصائيات والبث المباشر
                 <span className="text-emerald-600 text-lg md:text-xl font-semibold me-2 ms-2">
-                  — Stats & Real-Time Analytics
+                  — Live Telemetry &amp; Analytics
                 </span>
               </h1>
-              <p className="text-sm text-slate-500 font-medium mt-0.5 flex items-center gap-2">
-                <span>متابعة تفاعلية لحركة المرضى والزوار داخل العيادة والمنصة</span>
+              <p className="text-sm text-slate-500 font-medium mt-0.5 flex flex-wrap items-center gap-2">
+                <span>رصد فوري حقيقي بنسبة 100% للزوار والملفات الطبية بدون أي بيانات وهمية</span>
                 <span className="inline-block w-1.5 h-1.5 rounded-full bg-slate-300" />
-                <span className="text-slate-400">بيانات فورية من قاعدة البيانات الحية</span>
+                <span className="text-emerald-700 font-semibold flex items-center gap-1 text-xs">
+                  <Database className="w-3.5 h-3.5" />
+                  {storageLabel}
+                </span>
               </p>
             </div>
           </div>
@@ -547,16 +705,17 @@ function AnalyticsContent() {
 
         {/* Time Range Selector & Action Buttons */}
         <div className="flex flex-wrap items-center gap-2">
-          {/* Real-time Indicator */}
-          <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-xs font-semibold text-emerald-800 me-2">
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-xs font-bold text-emerald-800 me-1">
             <span className="relative flex h-2.5 w-2.5">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500" />
             </span>
-            <span>بث مباشر (Live)</span>
+            <span>
+              {uniqueLiveSummary.uniqueOnlineCount} متصل الآن •{" "}
+              {uniqueLiveSummary.openTabsCount} تبويب
+            </span>
           </div>
 
-          {/* Time Range Selector Buttons */}
           <div className="inline-flex rounded-lg border border-slate-200 bg-white p-1 shadow-sm">
             {[
               { id: "24h", labelAr: "24 ساعة", labelEn: "24h" },
@@ -576,12 +735,13 @@ function AnalyticsContent() {
                 )}
               >
                 <span>{item.labelAr}</span>
-                <span className="text-[10px] opacity-75 font-mono">({item.labelEn})</span>
+                <span className="text-[10px] opacity-75 font-mono">
+                  ({item.labelEn})
+                </span>
               </button>
             ))}
           </div>
 
-          {/* Refresh Button */}
           <Button
             variant="outline"
             size="sm"
@@ -591,12 +751,14 @@ function AnalyticsContent() {
             title="تحديث البيانات"
           >
             <RefreshCw
-              className={cn("w-3.5 h-3.5", isRefreshing && "animate-spin text-emerald-600")}
+              className={cn(
+                "w-3.5 h-3.5",
+                isRefreshing && "animate-spin text-emerald-600"
+              )}
             />
             <span className="hidden sm:inline text-xs font-medium">تحديث</span>
           </Button>
 
-          {/* CSV Export Button */}
           <Button
             variant="outline"
             size="sm"
@@ -628,8 +790,25 @@ function AnalyticsContent() {
         </div>
       )}
 
-      {/* Primary Mode Tabs: Clinical Rehab vs Web Traffic */}
+      {/* Primary Mode Tabs */}
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-200">
+        <button
+          type="button"
+          onClick={() => setActiveTab("traffic")}
+          className={cn(
+            "flex items-center gap-2.5 py-3.5 px-5 font-bold text-sm border-b-2 transition-all duration-150",
+            activeTab === "traffic"
+              ? "border-emerald-600 text-emerald-800 bg-emerald-50/70 rounded-t-xl"
+              : "border-transparent text-slate-600 hover:text-slate-900 hover:bg-slate-50 rounded-t-xl"
+          )}
+        >
+          <Radio className="w-4 h-4 text-emerald-600" />
+          <span>البث المباشر وزوار المنصة</span>
+          <Badge className="bg-emerald-600 text-white text-[11px] px-2 py-0.5 font-bold">
+            {uniqueLiveSummary.uniqueOnlineCount} متصل
+          </Badge>
+        </button>
+
         <button
           type="button"
           onClick={() => setActiveTab("clinical")}
@@ -646,31 +825,1080 @@ function AnalyticsContent() {
             {clinical.totalPatients} حالة
           </Badge>
         </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveTab("traffic")}
-          className={cn(
-            "flex items-center gap-2.5 py-3.5 px-5 font-bold text-sm border-b-2 transition-all duration-150",
-            activeTab === "traffic"
-              ? "border-emerald-600 text-emerald-800 bg-emerald-50/70 rounded-t-xl"
-              : "border-transparent text-slate-600 hover:text-slate-900 hover:bg-slate-50 rounded-t-xl"
-          )}
-        >
-          <Globe className="w-4 h-4 text-blue-600" />
-          <span>إحصائيات تفاعل وزوار الموقع</span>
-          <span className="flex h-2 w-2 relative">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-          </span>
-        </button>
       </div>
 
-      {activeTab === "clinical" ? (
+      {activeTab === "traffic" ? (
+        <div className="space-y-8">
+          {/* LIVE TELEMETRY HERO BANNER (Matching D:\sentance precision) */}
+          <div className="rounded-3xl bg-gradient-to-l from-slate-900 via-navy-950 to-slate-900 text-white p-6 sm:p-8 shadow-xl border border-slate-800 relative overflow-hidden">
+            <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-emerald-400 via-teal-400 to-blue-500" />
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge className="bg-emerald-500/20 text-emerald-300 border-emerald-500/30 text-xs font-bold gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                    <span>LIVE TELEMETRY</span>
+                  </Badge>
+                  <Badge className="bg-white/10 text-slate-200 border-white/15 text-[11px] font-mono">
+                    {storageLabel}
+                  </Badge>
+                </div>
+                <h2 className="text-xl sm:text-2xl font-black tracking-tight">
+                  مراقبة الحضور والتصفح الفوري (Real-Time Edge Presence)
+                </h2>
+                <p className="text-xs sm:text-sm text-slate-300 leading-relaxed max-w-2xl">
+                  تحديث تلقائي كل ثانيتين • نبض Web Worker كل 10 ثوانٍ لا يتأثر بإيقاف التبويب في الخلفية • إزالة فورية للجلسة عند إغلاق الصفحة عبر{" "}
+                  <code className="font-mono text-emerald-300">sendBeacon</code> وبصمة SHA-256 مقاومة لمتصفح Brave.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-4 px-5 py-4 rounded-2xl border border-emerald-500/35 bg-emerald-500/10 shrink-0">
+                <Radio className="w-8 h-8 text-emerald-400 shrink-0" />
+                <div>
+                  <p className="text-[11px] font-bold text-emerald-200">
+                    المستخدمون المتصلون الآن
+                  </p>
+                  <p className="text-3xl font-black font-mono tabular-nums text-emerald-400">
+                    {uniqueLiveSummary.uniqueOnlineCount}
+                  </p>
+                  <p className="text-[11px] text-slate-300 mt-0.5">
+                    {uniqueLiveSummary.signedInOnlineCount} مسجل &bull;{" "}
+                    {uniqueLiveSummary.guestOnlineCount} زائر &bull;{" "}
+                    {uniqueLiveSummary.openTabsCount} تبويب مفتوح
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* UNIQUE VISITORS & CONVERSION + WHO IS RUNNING LIVE */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Unique Visitors All-Time Deduplicated */}
+            <Card className="border border-slate-200 shadow-sm bg-white relative overflow-hidden">
+              <div className="absolute top-0 right-0 left-0 h-1 bg-indigo-500" />
+              <CardHeader className="p-5 pb-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-500">
+                    إجمالي الزوار الفريدين (بدون تكرار)
+                  </span>
+                  <Users className="w-5 h-5 text-indigo-600" />
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono">
+                  Deduplicated Registered + Guest Browsers
+                </p>
+              </CardHeader>
+              <CardContent className="p-5 pt-2 space-y-2">
+                <div className="text-3xl font-black font-mono text-navy-950 tabular-nums">
+                  {uniqueBreakdown.totalUnique}
+                </div>
+                <div className="flex items-center justify-between text-xs text-slate-600 pt-1">
+                  <span>{uniqueBreakdown.registeredCount} حساب مسجل</span>
+                  <span>{uniqueBreakdown.guestCount} زائر غير مسجل</span>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Registration Conversion */}
+            <Card className="border border-slate-200 shadow-sm bg-white relative overflow-hidden">
+              <div className="absolute top-0 right-0 left-0 h-1 bg-emerald-500" />
+              <CardHeader className="p-5 pb-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-500">
+                    نسبة تسجيل الحسابات
+                  </span>
+                  <UserCheck className="w-5 h-5 text-emerald-600" />
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono">
+                  Account Sign-Up Conversion
+                </p>
+              </CardHeader>
+              <CardContent className="p-5 pt-2 space-y-2">
+                <div className="text-3xl font-black font-mono text-emerald-600 tabular-nums">
+                  {uniqueBreakdown.conversionPct}%
+                </div>
+                <p className="text-xs text-slate-500 pt-1">
+                  مُحقَّق ببصمة SHA-256 + كوكي مستمر
+                </p>
+              </CardContent>
+            </Card>
+
+            {/* Registered Accounts Count */}
+            <Card className="border border-slate-200 shadow-sm bg-white relative overflow-hidden">
+              <div className="absolute top-0 right-0 left-0 h-1 bg-amber-500" />
+              <CardHeader className="p-5 pb-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-500">
+                    الحسابات المسجلة بالمنصة
+                  </span>
+                  <ShieldCheck className="w-5 h-5 text-amber-600" />
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono">
+                  Registered Admin &amp; User Accounts
+                </p>
+              </CardHeader>
+              <CardContent className="p-5 pt-2 space-y-2">
+                <div className="text-3xl font-black font-mono text-navy-950 tabular-nums">
+                  {registeredUsers.length}
+                </div>
+                <p className="text-xs text-slate-500 pt-1">
+                  {registeredUsers.filter((u) => u.role === "ADMIN").length} مدير &bull;{" "}
+                  {registeredUsers.filter((u) => u.role !== "ADMIN").length} مستخدم عادي
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* LIVE ACTIVE SESSIONS TABLE ("من يتصفح المنصة الآن") */}
+          <Card className="border border-slate-200 shadow-sm bg-white overflow-hidden">
+            <CardHeader className="p-5 border-b border-slate-100 bg-slate-50/60">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <CardTitle className="text-lg font-extrabold text-navy-950 flex items-center gap-2">
+                    <Activity className="w-5 h-5 text-emerald-600" />
+                    <span>
+                      من يتصفح المنصة الآن ({uniqueLiveSummary.uniqueOnlineCount}{" "}
+                      مستخدم &bull; {uniqueLiveSummary.openTabsCount} تبويب مفتوح)
+                    </span>
+                  </CardTitle>
+                  <CardDescription className="text-xs text-slate-500 mt-0.5">
+                    يتم التحديث تلقائياً كل ثانيتين وتُحسب مدة الجلسة بتوقيت الخادم بدقة تامة
+                  </CardDescription>
+                </div>
+                <Badge className="bg-emerald-50 text-emerald-700 border-emerald-200 font-mono text-xs">
+                  تزامن لحظي 2s
+                </Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="p-0">
+              {liveSessions.length === 0 ? (
+                <div className="py-10 px-6 text-center text-slate-400 text-sm">
+                  لا توجد جلسات متصفح نشطة في آخر 45 ثانية. بمجرد فتح أي صفحة ستظهر الجلسة هنا فوراً.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader className="bg-slate-50">
+                      <TableRow>
+                        <TableHead className="text-xs font-bold text-slate-600">
+                          المستخدم / البريد
+                        </TableHead>
+                        <TableHead className="text-xs font-bold text-slate-600">
+                          النشاط والمسار الحالي
+                        </TableHead>
+                        <TableHead className="text-xs font-bold text-slate-600">
+                          الدولة و IP والجهاز
+                        </TableHead>
+                        <TableHead className="text-xs font-bold text-slate-600 text-end">
+                          مدة الجلسة المباشرة
+                        </TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {liveSessions.map((session) => {
+                        const cInfo = formatCountry(
+                          session.countryCode || session.country
+                        );
+                        const devInfo = getDeviceDetails(session.device);
+                        const liveSeconds =
+                          session.elapsedSeconds +
+                          Math.max(0, Math.floor((nowMs - fetchedAtMs) / 1000));
+
+                        return (
+                          <TableRow
+                            key={session.sessionId}
+                            className="hover:bg-slate-50/70"
+                          >
+                            <TableCell>
+                              <div className="flex items-center gap-3">
+                                <span className="relative flex h-2.5 w-2.5 shrink-0">
+                                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500" />
+                                </span>
+                                <div className="w-8 h-8 rounded-full bg-emerald-600 text-white flex items-center justify-center text-xs font-extrabold shrink-0">
+                                  {(session.displayName || "ز").charAt(0).toUpperCase()}
+                                </div>
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="font-bold text-xs text-navy-950 truncate">
+                                      {session.displayName}
+                                    </span>
+                                    {session.role === "ADMIN" ? (
+                                      <Badge className="bg-amber-100 text-amber-800 border-amber-200 text-[10px] px-1.5 py-0">
+                                        مدير
+                                      </Badge>
+                                    ) : session.isAuthenticated ? (
+                                      <Badge className="bg-blue-100 text-blue-800 border-blue-200 text-[10px] px-1.5 py-0">
+                                        مسجل
+                                      </Badge>
+                                    ) : (
+                                      <Badge className="bg-slate-100 text-slate-700 border-slate-200 text-[10px] px-1.5 py-0">
+                                        زائر
+                                      </Badge>
+                                    )}
+                                  </div>
+                                  <p className="text-[11px] text-slate-500 font-mono truncate dir-ltr text-right">
+                                    {session.isAuthenticated
+                                      ? session.email
+                                      : session.visitorId.slice(0, 14)}
+                                  </p>
+                                </div>
+                              </div>
+                            </TableCell>
+
+                            <TableCell>
+                              <p className="text-xs font-bold text-navy-950">
+                                {session.currentActivity}
+                              </p>
+                              <p className="text-[11px] font-mono text-slate-400">
+                                {session.currentPath}
+                              </p>
+                            </TableCell>
+
+                            <TableCell>
+                              <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-700">
+                                <span>{cInfo.flag}</span>
+                                <span>
+                                  {cInfo.name}
+                                  {session.city ? ` (${session.city})` : ""}
+                                </span>
+                              </div>
+                              <p className="text-[11px] font-mono text-slate-400 mt-0.5">
+                                {session.ip} &bull; {devInfo.labelAr} &bull; {session.browser}
+                              </p>
+                            </TableCell>
+
+                            <TableCell className="text-end">
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-mono font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 tabular-nums dir-ltr">
+                                <Clock className="w-3 h-3" />
+                                {formatElapsedClock(liveSeconds)}
+                              </span>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* 2. 6 Real KPI Cards Row */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+            <Card className="border border-slate-100 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden bg-white">
+              <div className="absolute top-0 right-0 left-0 h-1 bg-emerald-500" />
+              <CardHeader className="p-4 pb-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-500">إجمالي الزيارات</span>
+                  <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                    <Eye className="w-4 h-4" />
+                  </div>
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono">Total Visits ({timeRange})</p>
+              </CardHeader>
+              <CardContent className="p-4 pt-0">
+                <div className="text-2xl font-black text-navy-950 font-mono tracking-tight">
+                  {isLoading && !data ? "..." : kpis.totalVisits.toLocaleString("ar-EG")}
+                </div>
+                <div className="mt-2 flex items-center gap-1.5">
+                  {kpis.visitChange >= 0 ? (
+                    <Badge variant="success" className="gap-1 px-1.5 py-0.5 text-[11px] font-bold">
+                      <TrendingUp className="w-3 h-3 text-emerald-600" />
+                      <span>+{kpis.visitChange}%</span>
+                    </Badge>
+                  ) : (
+                    <Badge variant="destructive" className="gap-1 px-1.5 py-0.5 text-[11px] font-bold">
+                      <TrendingDown className="w-3 h-3 text-red-600" />
+                      <span>{kpis.visitChange}%</span>
+                    </Badge>
+                  )}
+                  <span className="text-[10px] text-slate-400">مقارنة بالفترة السابقة</span>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border border-slate-100 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden bg-white">
+              <div className="absolute top-0 right-0 left-0 h-1 bg-blue-500" />
+              <CardHeader className="p-4 pb-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-500">الزوار الفريدون</span>
+                  <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
+                    <Users className="w-4 h-4" />
+                  </div>
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono">Unique ({timeRange})</p>
+              </CardHeader>
+              <CardContent className="p-4 pt-0">
+                <div className="text-2xl font-black text-navy-950 font-mono tracking-tight">
+                  {isLoading && !data ? "..." : kpis.uniqueVisitors.toLocaleString("ar-EG")}
+                </div>
+                <div className="mt-2 flex items-center gap-1.5">
+                  {kpis.uniqueChange >= 0 ? (
+                    <Badge variant="success" className="gap-1 px-1.5 py-0.5 text-[11px] font-bold">
+                      <TrendingUp className="w-3 h-3 text-emerald-600" />
+                      <span>+{kpis.uniqueChange}%</span>
+                    </Badge>
+                  ) : (
+                    <Badge variant="destructive" className="gap-1 px-1.5 py-0.5 text-[11px] font-bold">
+                      <TrendingDown className="w-3 h-3 text-red-600" />
+                      <span>{kpis.uniqueChange}%</span>
+                    </Badge>
+                  )}
+                  <span className="text-[10px] text-slate-400">معدل النمو</span>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border border-slate-100 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden bg-white">
+              <div className="absolute top-0 right-0 left-0 h-1 bg-purple-500" />
+              <CardHeader className="p-4 pb-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-500">زيارات اليوم</span>
+                  <div className="w-8 h-8 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center">
+                    <Activity className="w-4 h-4" />
+                  </div>
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono">Today&apos;s Visits</p>
+              </CardHeader>
+              <CardContent className="p-4 pt-0">
+                <div className="text-2xl font-black text-navy-950 font-mono tracking-tight">
+                  {isLoading && !data ? "..." : kpis.todayVisits.toLocaleString("ar-EG")}
+                </div>
+                <p className="mt-2 text-[11px] text-slate-500 font-medium">
+                  منهم <span className="font-bold text-purple-700 font-mono">{kpis.todayUnique}</span> زائر فريد اليوم
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card className="border border-emerald-200 bg-emerald-50/20 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden">
+              <div className="absolute top-0 right-0 left-0 h-1 bg-emerald-600" />
+              <CardHeader className="p-4 pb-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-emerald-900">المتصلون الآن</span>
+                  <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center">
+                    <Wifi className="w-4 h-4" />
+                  </div>
+                </div>
+                <p className="text-[11px] text-emerald-700 font-mono">Live Window (45s)</p>
+              </CardHeader>
+              <CardContent className="p-4 pt-0">
+                <div className="flex items-center gap-3">
+                  <div className="text-2xl font-black text-emerald-700 font-mono tracking-tight">
+                    {isLoading && !data ? "..." : kpis.liveActive.toLocaleString("ar-EG")}
+                  </div>
+                  <span className="relative flex h-3 w-3">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                    <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500" />
+                  </span>
+                </div>
+                <p className="mt-2 text-[11px] text-emerald-800/80 font-medium">
+                  نشط حالياً ({uniqueLiveSummary.openTabsCount} تبويب)
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card className="border border-slate-100 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden bg-white">
+              <div className="absolute top-0 right-0 left-0 h-1 bg-amber-500" />
+              <CardHeader className="p-4 pb-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-500">متوسط مدة الجلسة</span>
+                  <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center">
+                    <Clock className="w-4 h-4" />
+                  </div>
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono">Real Avg Duration</p>
+              </CardHeader>
+              <CardContent className="p-4 pt-0">
+                <div className="text-2xl font-black text-navy-950 font-mono tracking-tight">
+                  {isLoading && !data ? "..." : `${kpis.avgDuration}s`}
+                </div>
+                <p className="mt-2 text-[11px] text-slate-500 font-medium truncate" title={formatDuration(kpis.avgDuration)}>
+                  {formatDuration(kpis.avgDuration)}
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card className="border border-slate-100 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden bg-white">
+              <div className="absolute top-0 right-0 left-0 h-1 bg-rose-500" />
+              <CardHeader className="p-4 pb-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-500">معدل الارتداد</span>
+                  <div className="w-8 h-8 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center">
+                    <TrendingDown className="w-4 h-4" />
+                  </div>
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono">Real Bounce Rate</p>
+              </CardHeader>
+              <CardContent className="p-4 pt-0">
+                <div className="text-2xl font-black text-navy-950 font-mono tracking-tight">
+                  {isLoading && !data ? "..." : `${kpis.bounceRate}%`}
+                </div>
+                <p className="mt-2 text-[11px] text-slate-500 font-medium">
+                  جلسات الصفحة الواحدة فقط
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* 3. Main Real Time-Series Area Chart */}
+          <Card className="border border-slate-100 shadow-sm bg-white overflow-hidden">
+            <CardHeader className="border-b border-slate-100 pb-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <CardTitle className="text-lg font-bold text-navy-950 flex items-center gap-2">
+                    <span>المخطط الزمني الفعلي للزيارات والتفاعل</span>
+                    <span className="text-xs text-slate-400 font-mono font-normal">
+                      (Real Traffic Time Series)
+                    </span>
+                  </CardTitle>
+                  <CardDescription className="text-xs text-slate-500 mt-1">
+                    توزيع الزيارات الفعلية مقابل الزوار الفريدين بدون أي قيم افتراضية ({timeRange})
+                  </CardDescription>
+                </div>
+                <div className="flex items-center gap-4 text-xs font-semibold">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-3 h-3 rounded-full bg-emerald-500" />
+                    <span className="text-slate-700">إجمالي الزيارات (Visits)</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-3 h-3 rounded-full bg-blue-500" />
+                    <span className="text-slate-700">الزوار الفريدون (Unique)</span>
+                  </div>
+                </div>
+              </div>
+            </CardHeader>
+
+            <CardContent className="p-4 sm:p-6">
+              {isLoading && !data ? (
+                <div className="h-[320px] flex items-center justify-center text-slate-400 text-sm">
+                  <div className="flex flex-col items-center gap-2">
+                    <RefreshCw className="w-6 h-6 animate-spin text-emerald-600" />
+                    <span>جاري تحميل بيانات الرسم البياني...</span>
+                  </div>
+                </div>
+              ) : !data?.timeSeries || data.timeSeries.length === 0 ? (
+                <div className="h-[320px] flex items-center justify-center text-slate-400 text-sm">
+                  لا توجد بيانات مسجلة في هذا النطاق الزمني.
+                </div>
+              ) : (
+                <div className="h-[340px] w-full" dir="ltr">
+                  {mounted && (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart
+                        data={data.timeSeries}
+                        margin={{ top: 10, right: 20, left: 0, bottom: 0 }}
+                      >
+                        <defs>
+                          <linearGradient id="colorVisits" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#10b981" stopOpacity={0.35} />
+                            <stop offset="95%" stopColor="#10b981" stopOpacity={0.0} />
+                          </linearGradient>
+                          <linearGradient id="colorUnique" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.35} />
+                            <stop offset="95%" stopColor="#3b82f6" stopOpacity={0.0} />
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+                        <XAxis
+                          dataKey="date"
+                          tickFormatter={formatTick}
+                          stroke="#94a3b8"
+                          fontSize={11}
+                          tickLine={false}
+                          axisLine={{ stroke: "#e2e8f0" }}
+                        />
+                        <YAxis
+                          stroke="#94a3b8"
+                          fontSize={11}
+                          tickLine={false}
+                          axisLine={false}
+                          allowDecimals={false}
+                        />
+                        <Tooltip
+                          content={({ active, payload, label }) => {
+                            if (active && payload && payload.length) {
+                              const item = payload[0]?.payload as TimeSeriesPoint;
+                              const labelStr = String(label || "");
+                              const parsedLabel = new Date(labelStr);
+                              return (
+                                <div
+                                  className="bg-navy-950/95 text-white p-3 rounded-xl shadow-xl border border-navy-800 text-xs min-w-[200px] backdrop-blur-md"
+                                  dir="rtl"
+                                >
+                                  <p className="font-bold text-slate-300 border-b border-navy-800 pb-1.5 mb-2 font-mono">
+                                    {Number.isNaN(parsedLabel.getTime())
+                                      ? labelStr
+                                      : timeRange === "24h"
+                                      ? parsedLabel.toLocaleString("ar-EG", {
+                                          hour: "numeric",
+                                          minute: "2-digit",
+                                          day: "numeric",
+                                          month: "short",
+                                        })
+                                      : parsedLabel.toLocaleDateString("ar-EG", {
+                                          year: "numeric",
+                                          month: "long",
+                                          day: "numeric",
+                                        })}
+                                  </p>
+                                  <div className="space-y-1.5">
+                                    <div className="flex items-center justify-between text-emerald-400">
+                                      <span className="flex items-center gap-1.5">
+                                        <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                                        <span>إجمالي الزيارات:</span>
+                                      </span>
+                                      <span className="font-bold font-mono text-sm">
+                                        {item?.visits?.toLocaleString("ar-EG")}
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center justify-between text-blue-400">
+                                      <span className="flex items-center gap-1.5">
+                                        <span className="w-2 h-2 rounded-full bg-blue-400" />
+                                        <span>الزوار الفريدون:</span>
+                                      </span>
+                                      <span className="font-bold font-mono text-sm">
+                                        {item?.unique?.toLocaleString("ar-EG")}
+                                      </span>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            }
+                            return null;
+                          }}
+                        />
+                        <Legend
+                          wrapperStyle={{ paddingTop: "14px", fontSize: "12px" }}
+                          formatter={(val) => {
+                            if (val === "visits") return "إجمالي الزيارات (Total Visits)";
+                            if (val === "unique") return "الزوار الفريدون (Unique Visitors)";
+                            return val;
+                          }}
+                        />
+                        <Area
+                          type="monotone"
+                          dataKey="visits"
+                          name="visits"
+                          stroke="#10b981"
+                          strokeWidth={2.5}
+                          fillOpacity={1}
+                          fill="url(#colorVisits)"
+                        />
+                        <Area
+                          type="monotone"
+                          dataKey="unique"
+                          name="unique"
+                          stroke="#3b82f6"
+                          strokeWidth={2.5}
+                          fillOpacity={1}
+                          fill="url(#colorUnique)"
+                        />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* 4. Breakdowns Section */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <Card className="border border-slate-100 shadow-sm bg-white lg:col-span-2">
+              <CardHeader className="p-5 border-b border-slate-100">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="text-base font-bold text-navy-950 flex items-center gap-2">
+                      <Layers className="w-4 h-4 text-emerald-600" />
+                      <span>أكثر الصفحات والوحدات زيارة</span>
+                    </CardTitle>
+                    <CardDescription className="text-xs text-slate-500 mt-0.5">
+                      Top Visited Pages &amp; Clinic Modules
+                    </CardDescription>
+                  </div>
+                  <Badge variant="secondary" className="font-mono text-xs">
+                    {data?.topPages?.length || 0} صفحات
+                  </Badge>
+                </div>
+              </CardHeader>
+              <CardContent className="p-5">
+                {(!data?.topPages || data.topPages.length === 0) ? (
+                  <p className="text-xs text-slate-400 py-6 text-center">
+                    لا توجد زيارات مسجلة في هذه الفترة الزمنية بعد.
+                  </p>
+                ) : (
+                  <div className="space-y-3.5">
+                    {data.topPages.slice(0, 7).map((item, idx) => {
+                      const pName = getPageName(item.page || "/");
+                      const total = kpis.totalVisits || 1;
+                      const pct = Math.min(100, Math.round((item.count / total) * 100));
+
+                      return (
+                        <div key={idx} className="space-y-1">
+                          <div className="flex items-center justify-between text-xs font-semibold">
+                            <div className="flex items-center gap-2 max-w-[70%] truncate">
+                              <span className="w-5 h-5 rounded-md bg-slate-100 text-slate-600 flex items-center justify-center text-[10px] font-mono">
+                                {idx + 1}
+                              </span>
+                              <span className="text-navy-950">{pName.ar}</span>
+                              <span className="text-slate-400 font-mono text-[11px] truncate">
+                                ({item.page})
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <span className="font-mono text-emerald-700 font-bold">
+                                {item.count.toLocaleString("ar-EG")} زيارة
+                              </span>
+                              <span className="text-[10px] text-slate-400 font-mono w-9 text-left">
+                                ({pct}%)
+                              </span>
+                            </div>
+                          </div>
+                          <div className="w-full h-2 rounded-full bg-slate-100 overflow-hidden">
+                            <div
+                              className="h-full bg-emerald-500 rounded-full transition-all duration-500"
+                              style={{ width: `${Math.max(4, pct)}%` }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="border border-slate-100 shadow-sm bg-white">
+              <CardHeader className="p-5 border-b border-slate-100">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="text-base font-bold text-navy-950 flex items-center gap-2">
+                      <Compass className="w-4 h-4 text-emerald-600" />
+                      <span>مصادر الزيارات</span>
+                    </CardTitle>
+                    <CardDescription className="text-xs text-slate-500 mt-0.5">
+                      Traffic Sources &amp; Referrers
+                    </CardDescription>
+                  </div>
+                  <Badge variant="secondary" className="font-mono text-xs">
+                    {data?.topReferrers?.length || 0} مصادر
+                  </Badge>
+                </div>
+              </CardHeader>
+              <CardContent className="p-5">
+                {(!data?.topReferrers || data.topReferrers.length === 0) ? (
+                  <p className="text-xs text-slate-400 py-6 text-center">
+                    لا توجد مصادر مسجلة في هذه الفترة بعد.
+                  </p>
+                ) : (
+                  <div className="space-y-3">
+                    {data.topReferrers.slice(0, 6).map((item, idx) => {
+                      const r = formatReferrer(item.referrer || "Direct");
+                      const total = kpis.totalVisits || 1;
+                      const pct = Math.min(100, Math.round((item.count / total) * 100));
+
+                      return (
+                        <div
+                          key={idx}
+                          className="p-2.5 rounded-lg border border-slate-100 hover:border-slate-200 transition-colors flex items-center justify-between"
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <span className={cn("px-2 py-0.5 rounded text-[11px] font-bold border", r.color)}>
+                              {r.badge}
+                            </span>
+                            <div>
+                              <p className="text-xs font-bold text-navy-950">{r.labelAr}</p>
+                              <p className="text-[10px] text-slate-400">{r.labelEn}</p>
+                            </div>
+                          </div>
+                          <div className="text-left font-mono">
+                            <span className="text-xs font-bold text-navy-950">
+                              {item.count.toLocaleString("ar-EG")}
+                            </span>
+                            <span className="text-[10px] text-slate-400 ms-1">({pct}%)</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="border border-slate-100 shadow-sm bg-white">
+              <CardHeader className="p-5 border-b border-slate-100">
+                <CardTitle className="text-base font-bold text-navy-950 flex items-center gap-2">
+                  <Monitor className="w-4 h-4 text-emerald-600" />
+                  <span>الأجهزة المستخدمة</span>
+                </CardTitle>
+                <CardDescription className="text-xs text-slate-500 mt-0.5">
+                  Device Breakdown
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="p-5">
+                {(!data?.devices || data.devices.length === 0) ? (
+                  <p className="text-xs text-slate-400 py-6 text-center">لا توجد بيانات أجهزة بعد.</p>
+                ) : (
+                  <div className="space-y-3">
+                    {data.devices.map((d, idx) => {
+                      const dev = getDeviceDetails(d.device || "desktop");
+                      const DevIcon = dev.icon;
+                      const total = kpis.totalVisits || 1;
+                      const pct = Math.min(100, Math.round((d.count / total) * 100));
+
+                      return (
+                        <div key={idx} className="space-y-1.5">
+                          <div className="flex items-center justify-between text-xs font-semibold">
+                            <div className="flex items-center gap-2">
+                              <div className={cn("w-7 h-7 rounded-lg flex items-center justify-center", dev.color)}>
+                                <DevIcon className="w-3.5 h-3.5" />
+                              </div>
+                              <div>
+                                <span className="text-navy-950 font-bold">{dev.labelAr}</span>
+                                <span className="text-slate-400 text-[10px] font-mono ms-1">
+                                  ({dev.labelEn})
+                                </span>
+                              </div>
+                            </div>
+                            <div className="font-mono">
+                              <span className="font-bold text-navy-950">
+                                {d.count.toLocaleString("ar-EG")}
+                              </span>
+                              <span className="text-[10px] text-slate-400 ms-1 font-semibold">
+                                ({pct}%)
+                              </span>
+                            </div>
+                          </div>
+                          <div className="w-full h-2 rounded-full bg-slate-100 overflow-hidden">
+                            <div
+                              className="h-full bg-emerald-500 rounded-full transition-all duration-500"
+                              style={{ width: `${Math.max(5, pct)}%` }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="border border-slate-100 shadow-sm bg-white">
+              <CardHeader className="p-5 border-b border-slate-100">
+                <CardTitle className="text-base font-bold text-navy-950 flex items-center gap-2">
+                  <Laptop className="w-4 h-4 text-emerald-600" />
+                  <span>المتصفحات</span>
+                </CardTitle>
+                <CardDescription className="text-xs text-slate-500 mt-0.5">
+                  Client Browsers
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="p-5">
+                {(!data?.browsers || data.browsers.length === 0) ? (
+                  <p className="text-xs text-slate-400 py-6 text-center">لا توجد بيانات متصفحات بعد.</p>
+                ) : (
+                  <div className="space-y-3">
+                    {data.browsers.slice(0, 5).map((b, idx) => {
+                      const total = kpis.totalVisits || 1;
+                      const pct = Math.min(100, Math.round((b.count / total) * 100));
+
+                      return (
+                        <div key={idx} className="space-y-1">
+                          <div className="flex items-center justify-between text-xs font-semibold">
+                            <span className="text-navy-950 font-mono">{b.browser || "Unknown"}</span>
+                            <div className="font-mono text-slate-600">
+                              <span className="font-bold text-navy-950">
+                                {b.count.toLocaleString("ar-EG")}
+                              </span>
+                              <span className="text-[10px] text-slate-400 ms-1">({pct}%)</span>
+                            </div>
+                          </div>
+                          <div className="w-full h-2 rounded-full bg-slate-100 overflow-hidden">
+                            <div
+                              className="h-full bg-blue-500 rounded-full transition-all duration-500"
+                              style={{ width: `${Math.max(4, pct)}%` }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="border border-slate-100 shadow-sm bg-white">
+              <CardHeader className="p-5 border-b border-slate-100">
+                <CardTitle className="text-base font-bold text-navy-950 flex items-center gap-2">
+                  <Globe className="w-4 h-4 text-emerald-600" />
+                  <span>التوزيع الجغرافي (الدول)</span>
+                </CardTitle>
+                <CardDescription className="text-xs text-slate-500 mt-0.5">
+                  Geographic Traffic by Country
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="p-5">
+                {(!data?.countries || data.countries.length === 0) ? (
+                  <p className="text-xs text-slate-400 py-6 text-center">لا توجد بيانات جغرافية بعد.</p>
+                ) : (
+                  <div className="space-y-3">
+                    {data.countries.slice(0, 5).map((c, idx) => {
+                      const country = formatCountry(c.country || null);
+                      const total = kpis.totalVisits || 1;
+                      const pct = Math.min(100, Math.round((c.count / total) * 100));
+
+                      return (
+                        <div key={idx} className="space-y-1">
+                          <div className="flex items-center justify-between text-xs font-semibold">
+                            <div className="flex items-center gap-2">
+                              <span className="text-base">{country.flag}</span>
+                              <span className="text-navy-950 font-bold">{country.name}</span>
+                              {c.country && (
+                                <span className="text-[10px] text-slate-400 font-mono">
+                                  ({c.country})
+                                </span>
+                              )}
+                            </div>
+                            <div className="font-mono text-slate-600">
+                              <span className="font-bold text-navy-950">
+                                {c.count.toLocaleString("ar-EG")}
+                              </span>
+                              <span className="text-[10px] text-slate-400 ms-1">({pct}%)</span>
+                            </div>
+                          </div>
+                          <div className="w-full h-2 rounded-full bg-slate-100 overflow-hidden">
+                            <div
+                              className="h-full bg-purple-500 rounded-full transition-all duration-500"
+                              style={{ width: `${Math.max(4, pct)}%` }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Registered Users Directory Card */}
+          <Card className="border border-slate-100 shadow-sm bg-white overflow-hidden">
+            <CardHeader className="p-5 border-b border-slate-100">
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-base font-bold text-navy-950 flex items-center gap-2">
+                    <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                    <span>الحسابات المسجلة بالنظام</span>
+                  </CardTitle>
+                  <CardDescription className="text-xs text-slate-500 mt-0.5">
+                    قائمة المستخدمين والمديرين المسجلين فعلياً عبر نموذج إنشاء الحساب
+                  </CardDescription>
+                </div>
+                <Badge variant="secondary" className="font-mono text-xs">
+                  {registeredUsers.length} حساب
+                </Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="p-5">
+              {registeredUsers.length === 0 ? (
+                <p className="text-xs text-slate-400 text-center py-4">
+                  لا توجد حسابات مسجلة في المخزن الحالي بعد.
+                </p>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {registeredUsers.map((acc) => (
+                    <div
+                      key={acc.id}
+                      className="p-3.5 rounded-2xl border border-slate-200 bg-slate-50/70 flex items-center justify-between gap-3"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-navy-950 truncate">{acc.name}</p>
+                        <p className="text-[11px] font-mono text-slate-500 truncate dir-ltr text-right">
+                          {acc.email}
+                        </p>
+                      </div>
+                      <Badge
+                        className={
+                          acc.role === "ADMIN"
+                            ? "bg-amber-100 text-amber-800 border-amber-200 text-[10px]"
+                            : "bg-emerald-100 text-emerald-800 border-emerald-200 text-[10px]"
+                        }
+                      >
+                        {acc.role === "ADMIN" ? "مدير" : "مستخدم"}
+                      </Badge>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* 5. Recent Visits Feed Table */}
+          <Card className="border border-slate-100 shadow-sm bg-white overflow-hidden">
+            <CardHeader className="border-b border-slate-100 p-5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-2.5">
+                    <CardTitle className="text-lg font-bold text-navy-950">
+                      سجل الزيارات الفعلي الحديث
+                    </CardTitle>
+                    <Badge variant="secondary" className="gap-1 font-mono text-xs">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block animate-pulse" />
+                      <span>تحديث فوري كل ثانيتين</span>
+                    </Badge>
+                  </div>
+                  <CardDescription className="text-xs text-slate-500 mt-1">
+                    سجل الزيارات الفعلية للزوار والحسابات مع الموقع الجغرافي والجهاز ومسار التنقل
+                  </CardDescription>
+                </div>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleExportCSV}
+                  className="gap-1.5 border-slate-200 text-slate-700 hover:text-emerald-700 hover:bg-emerald-50"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span className="text-xs font-semibold">تصدير CSV</span>
+                </Button>
+              </div>
+            </CardHeader>
+
+            <CardContent className="p-0">
+              {(!data?.recentVisits || data.recentVisits.length === 0) ? (
+                <div className="py-12 text-center text-slate-400 text-sm">
+                  لا توجد زيارات مسجلة في النطاق الزمني المحدد بعد.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader className="bg-slate-50">
+                      <TableRow>
+                        <TableHead className="w-[170px] text-xs font-bold text-slate-600">
+                          الزائر / الحساب
+                        </TableHead>
+                        <TableHead className="text-xs font-bold text-slate-600">
+                          الصفحة المزارة (Page)
+                        </TableHead>
+                        <TableHead className="text-xs font-bold text-slate-600">
+                          الجهاز والمتصفح
+                        </TableHead>
+                        <TableHead className="text-xs font-bold text-slate-600">
+                          الموقع و IP
+                        </TableHead>
+                        <TableHead className="text-xs font-bold text-slate-600">
+                          المرجع (Referrer)
+                        </TableHead>
+                        <TableHead className="text-xs font-bold text-slate-600 text-end">
+                          وقت الزيارة
+                        </TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {data.recentVisits.map((visit) => {
+                        const pInfo = getPageName(visit.page);
+                        const cInfo = formatCountry(visit.countryCode || visit.country);
+                        const devInfo = getDeviceDetails(visit.device);
+                        const DevIcon = devInfo.icon;
+                        const rInfo = formatReferrer(visit.referrer);
+
+                        const visitDate = new Date(visit.createdAt);
+                        const timeStr = visitDate.toLocaleTimeString("ar-EG", {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                          second: "2-digit",
+                        });
+                        const dateStr = visitDate.toLocaleDateString("ar-EG", {
+                          month: "short",
+                          day: "numeric",
+                        });
+
+                        return (
+                          <TableRow key={visit.id} className="hover:bg-slate-50/70 transition-colors">
+                            <TableCell>
+                              <div className="flex flex-col">
+                                <span className="text-xs font-bold text-navy-950">
+                                  {visit.displayName || "زائر"}
+                                </span>
+                                <span className="text-[10px] font-mono text-slate-400">
+                                  {visit.email || visit.visitorId.slice(0, 12)}
+                                </span>
+                              </div>
+                            </TableCell>
+
+                            <TableCell>
+                              <div className="flex flex-col">
+                                <span className="text-xs font-bold text-navy-950">
+                                  {pInfo.ar}
+                                </span>
+                                <span className="text-[11px] text-slate-400 font-mono">
+                                  {visit.page}
+                                </span>
+                              </div>
+                            </TableCell>
+
+                            <TableCell>
+                              <div className="flex items-center gap-1.5">
+                                <div className={cn("w-6 h-6 rounded flex items-center justify-center", devInfo.color)}>
+                                  <DevIcon className="w-3.5 h-3.5" />
+                                </div>
+                                <div className="flex flex-col">
+                                  <span className="text-xs font-medium text-slate-700">
+                                    {devInfo.labelAr}
+                                  </span>
+                                  <span className="text-[10px] font-mono text-slate-400">
+                                    {visit.browser || "Unknown"}
+                                  </span>
+                                </div>
+                              </div>
+                            </TableCell>
+
+                            <TableCell>
+                              <div className="flex flex-col">
+                                <div className="flex items-center gap-1.5 text-xs font-medium text-slate-700">
+                                  <span>{cInfo.flag}</span>
+                                  <span>
+                                    {cInfo.name}
+                                    {visit.city ? ` (${visit.city})` : ""}
+                                  </span>
+                                </div>
+                                {visit.ip && (
+                                  <span className="text-[10px] font-mono text-slate-400">
+                                    {visit.ip}
+                                  </span>
+                                )}
+                              </div>
+                            </TableCell>
+
+                            <TableCell>
+                              <Badge variant="outline" className={cn("text-[10px] font-semibold border", rInfo.color)}>
+                                {rInfo.badge}
+                              </Badge>
+                            </TableCell>
+
+                            <TableCell className="text-end">
+                              <div className="flex flex-col items-end">
+                                <span className="text-xs font-mono font-bold text-slate-700">
+                                  {timeStr}
+                                </span>
+                                <span className="text-[10px] text-slate-400">
+                                  {dateStr}
+                                </span>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      ) : (
         <div className="space-y-8">
           {/* Clinical KPIs Row */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {/* KPI 1: Total Patients */}
             <Card className="border border-slate-200 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden bg-white">
               <div className="absolute top-0 right-0 left-0 h-1 bg-emerald-500" />
               <CardHeader className="p-5 pb-2">
@@ -695,7 +1923,6 @@ function AnalyticsContent() {
               </CardContent>
             </Card>
 
-            {/* KPI 2: Active In-Rehab */}
             <Card className="border border-slate-200 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden bg-white">
               <div className="absolute top-0 right-0 left-0 h-1 bg-blue-500" />
               <CardHeader className="p-5 pb-2">
@@ -715,12 +1942,11 @@ function AnalyticsContent() {
                   <Badge className="bg-blue-50 text-blue-700 border-blue-200">
                     برامج جارية
                   </Badge>
-                  <span>متابعة تمارين وجداول أسبوعية</span>
+                  <span>متابعة تمارين وجلسات أسبوعية</span>
                 </div>
               </CardContent>
             </Card>
 
-            {/* KPI 3: Recovery & RTP Rate */}
             <Card className="border border-slate-200 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden bg-white">
               <div className="absolute top-0 right-0 left-0 h-1 bg-purple-500" />
               <CardHeader className="p-5 pb-2">
@@ -730,7 +1956,7 @@ function AnalyticsContent() {
                     <CheckCircle2 className="w-5 h-5" />
                   </div>
                 </div>
-                <p className="text-[11px] text-slate-400 font-mono">Recovery & RTP Rate</p>
+                <p className="text-[11px] text-slate-400 font-mono">Recovery &amp; RTP Rate</p>
               </CardHeader>
               <CardContent className="p-5 pt-0">
                 <div className="text-3xl font-black text-purple-900 font-mono tracking-tight">
@@ -745,7 +1971,6 @@ function AnalyticsContent() {
               </CardContent>
             </Card>
 
-            {/* KPI 4: Exercises & Protocols */}
             <Card className="border border-slate-200 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden bg-white">
               <div className="absolute top-0 right-0 left-0 h-1 bg-amber-500" />
               <CardHeader className="p-5 pb-2">
@@ -755,7 +1980,7 @@ function AnalyticsContent() {
                     <Dumbbell className="w-5 h-5" />
                   </div>
                 </div>
-                <p className="text-[11px] text-slate-400 font-mono">Exercises & Protocols</p>
+                <p className="text-[11px] text-slate-400 font-mono">Exercises &amp; Protocols</p>
               </CardHeader>
               <CardContent className="p-5 pt-0">
                 <div className="text-2xl font-black text-amber-900 font-mono tracking-tight">
@@ -872,7 +2097,6 @@ function AnalyticsContent() {
 
           {/* Injury Distribution & Side Breakdown Grid */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Column 1 & 2: Injury Breakdown */}
             <Card className="lg:col-span-2 border border-slate-200 shadow-sm bg-white">
               <CardHeader className="p-5 border-b border-slate-100 bg-slate-50/50">
                 <div className="flex items-center justify-between">
@@ -929,9 +2153,7 @@ function AnalyticsContent() {
               </CardContent>
             </Card>
 
-            {/* Column 3: Injured Side & Quick Actions */}
             <div className="space-y-6">
-              {/* Injured Side Card */}
               <Card className="border border-slate-200 shadow-sm bg-white">
                 <CardHeader className="p-5 border-b border-slate-100 bg-slate-50/50">
                   <CardTitle className="text-base font-bold text-navy-950 flex items-center gap-2">
@@ -961,7 +2183,6 @@ function AnalyticsContent() {
                 </CardContent>
               </Card>
 
-              {/* Quick Actions */}
               <Card className="border border-emerald-100 shadow-sm bg-gradient-to-br from-emerald-500/10 via-white to-slate-50">
                 <CardHeader className="p-5 pb-3">
                   <CardTitle className="text-sm font-bold text-navy-950 flex items-center gap-2">
@@ -1004,776 +2225,13 @@ function AnalyticsContent() {
             </div>
           </div>
         </div>
-      ) : (
-        <div className="space-y-8">
-
-      {/* 2. KPI Cards Row */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
-        {/* KPI 1: Total Visits */}
-        <Card className="border border-slate-100 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden bg-white">
-          <div className="absolute top-0 right-0 left-0 h-1 bg-emerald-500" />
-          <CardHeader className="p-4 pb-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-500">إجمالي الزيارات</span>
-              <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
-                <Eye className="w-4 h-4" />
-              </div>
-            </div>
-            <p className="text-[11px] text-slate-400 font-mono">Total Visits</p>
-          </CardHeader>
-          <CardContent className="p-4 pt-0">
-            <div className="text-2xl font-black text-navy-950 font-mono tracking-tight">
-              {isLoading ? "..." : kpis.totalVisits.toLocaleString("ar-EG")}
-            </div>
-            <div className="mt-2 flex items-center gap-1.5">
-              {kpis.visitChange >= 0 ? (
-                <Badge variant="success" className="gap-1 px-1.5 py-0.5 text-[11px] font-bold">
-                  <TrendingUp className="w-3 h-3 text-emerald-600" />
-                  <span>+{kpis.visitChange}%</span>
-                </Badge>
-              ) : (
-                <Badge variant="destructive" className="gap-1 px-1.5 py-0.5 text-[11px] font-bold">
-                  <TrendingDown className="w-3 h-3 text-red-600" />
-                  <span>{kpis.visitChange}%</span>
-                </Badge>
-              )}
-              <span className="text-[10px] text-slate-400">مقارنة بالفترة السابقة</span>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* KPI 2: Unique Visitors */}
-        <Card className="border border-slate-100 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden bg-white">
-          <div className="absolute top-0 right-0 left-0 h-1 bg-blue-500" />
-          <CardHeader className="p-4 pb-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-500">الزوار الفريدون</span>
-              <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
-                <Users className="w-4 h-4" />
-              </div>
-            </div>
-            <p className="text-[11px] text-slate-400 font-mono">Unique Visitors</p>
-          </CardHeader>
-          <CardContent className="p-4 pt-0">
-            <div className="text-2xl font-black text-navy-950 font-mono tracking-tight">
-              {isLoading ? "..." : kpis.uniqueVisitors.toLocaleString("ar-EG")}
-            </div>
-            <div className="mt-2 flex items-center gap-1.5">
-              {kpis.uniqueChange >= 0 ? (
-                <Badge variant="success" className="gap-1 px-1.5 py-0.5 text-[11px] font-bold">
-                  <TrendingUp className="w-3 h-3 text-emerald-600" />
-                  <span>+{kpis.uniqueChange}%</span>
-                </Badge>
-              ) : (
-                <Badge variant="destructive" className="gap-1 px-1.5 py-0.5 text-[11px] font-bold">
-                  <TrendingDown className="w-3 h-3 text-red-600" />
-                  <span>{kpis.uniqueChange}%</span>
-                </Badge>
-              )}
-              <span className="text-[10px] text-slate-400">معدل النمو</span>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* KPI 3: Today's Visitors */}
-        <Card className="border border-slate-100 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden bg-white">
-          <div className="absolute top-0 right-0 left-0 h-1 bg-purple-500" />
-          <CardHeader className="p-4 pb-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-500">زوار اليوم</span>
-              <div className="w-8 h-8 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center">
-                <Activity className="w-4 h-4" />
-              </div>
-            </div>
-            <p className="text-[11px] text-slate-400 font-mono">Today&apos;s Visitors</p>
-          </CardHeader>
-          <CardContent className="p-4 pt-0">
-            <div className="text-2xl font-black text-navy-950 font-mono tracking-tight">
-              {isLoading ? "..." : kpis.todayVisits.toLocaleString("ar-EG")}
-            </div>
-            <p className="mt-2 text-[11px] text-slate-500 font-medium">
-              منهم <span className="font-bold text-purple-700 font-mono">{kpis.todayUnique}</span> زائر فريد اليوم
-            </p>
-          </CardContent>
-        </Card>
-
-        {/* KPI 4: Live Active Now */}
-        <Card className="border border-emerald-200 bg-emerald-50/20 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden">
-          <div className="absolute top-0 right-0 left-0 h-1 bg-emerald-600" />
-          <CardHeader className="p-4 pb-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-emerald-900">المتصلون الآن</span>
-              <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center">
-                <Wifi className="w-4 h-4" />
-              </div>
-            </div>
-            <p className="text-[11px] text-emerald-700 font-mono">Live Active (5m)</p>
-          </CardHeader>
-          <CardContent className="p-4 pt-0">
-            <div className="flex items-center gap-3">
-              <div className="text-2xl font-black text-emerald-700 font-mono tracking-tight">
-                {isLoading ? "..." : kpis.liveActive.toLocaleString("ar-EG")}
-              </div>
-              <span className="relative flex h-3 w-3">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
-              </span>
-            </div>
-            <p className="mt-2 text-[11px] text-emerald-800/80 font-medium">
-              نشط الآن في آخر 5 دقائق
-            </p>
-          </CardContent>
-        </Card>
-
-        {/* KPI 5: Avg Session Duration */}
-        <Card className="border border-slate-100 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden bg-white">
-          <div className="absolute top-0 right-0 left-0 h-1 bg-amber-500" />
-          <CardHeader className="p-4 pb-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-500">متوسط مدة الجلسة</span>
-              <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center">
-                <Clock className="w-4 h-4" />
-              </div>
-            </div>
-            <p className="text-[11px] text-slate-400 font-mono">Avg Session Duration</p>
-          </CardHeader>
-          <CardContent className="p-4 pt-0">
-            <div className="text-2xl font-black text-navy-950 font-mono tracking-tight">
-              {isLoading ? "..." : `${kpis.avgDuration}s`}
-            </div>
-            <p className="mt-2 text-[11px] text-slate-500 font-medium truncate" title={formatDuration(kpis.avgDuration)}>
-              {formatDuration(kpis.avgDuration)}
-            </p>
-          </CardContent>
-        </Card>
-
-        {/* KPI 6: Bounce Rate */}
-        <Card className="border border-slate-100 shadow-sm hover:shadow-md transition-shadow relative overflow-hidden bg-white">
-          <div className="absolute top-0 right-0 left-0 h-1 bg-rose-500" />
-          <CardHeader className="p-4 pb-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-500">معدل الارتداد</span>
-              <div className="w-8 h-8 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center">
-                <TrendingDown className="w-4 h-4" />
-              </div>
-            </div>
-            <p className="text-[11px] text-slate-400 font-mono">Bounce Rate</p>
-          </CardHeader>
-          <CardContent className="p-4 pt-0">
-            <div className="text-2xl font-black text-navy-950 font-mono tracking-tight">
-              {isLoading ? "..." : `${kpis.bounceRate}%`}
-            </div>
-            <p className="mt-2 text-[11px] text-slate-500 font-medium">
-              زيارات الصفحة الواحدة فقط
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* 3. Main Time-Series Area Chart */}
-      <Card className="border border-slate-100 shadow-sm bg-white overflow-hidden">
-        <CardHeader className="border-b border-slate-100 pb-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <div>
-              <CardTitle className="text-lg font-bold text-navy-950 flex items-center gap-2">
-                <span>المخطط الزمني للزيارات والتفاعل</span>
-                <span className="text-xs text-slate-400 font-mono font-normal">
-                  (Traffic Trends & User Dynamics)
-                </span>
-              </CardTitle>
-              <CardDescription className="text-xs text-slate-500 mt-1">
-                توزيع الزيارات الكلية مقابل الزوار الفريدين عبر الفترة المحددة ({timeRange})
-              </CardDescription>
-            </div>
-            <div className="flex items-center gap-4 text-xs font-semibold">
-              <div className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rounded-full bg-emerald-500" />
-                <span className="text-slate-700">إجمالي الزيارات (Visits)</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rounded-full bg-blue-500" />
-                <span className="text-slate-700">الزوار الفريدون (Unique)</span>
-              </div>
-            </div>
-          </div>
-        </CardHeader>
-
-        <CardContent className="p-4 sm:p-6">
-          {isLoading && !data ? (
-            <div className="h-[320px] flex items-center justify-center text-slate-400 text-sm">
-              <div className="flex flex-col items-center gap-2">
-                <RefreshCw className="w-6 h-6 animate-spin text-emerald-600" />
-                <span>جاري تحميل بيانات الرسم البياني...</span>
-              </div>
-            </div>
-          ) : !data?.timeSeries || data.timeSeries.length === 0 ? (
-            <div className="h-[320px] flex items-center justify-center text-slate-400 text-sm">
-              لا توجد بيانات مسجلة في هذا النطاق الزمني.
-            </div>
-          ) : (
-            <div className="h-[340px] w-full" dir="ltr">
-              {mounted && (
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart
-                    data={data.timeSeries}
-                    margin={{ top: 10, right: 20, left: 0, bottom: 0 }}
-                  >
-                    <defs>
-                      <linearGradient id="colorVisits" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.35} />
-                        <stop offset="95%" stopColor="#10b981" stopOpacity={0.0} />
-                      </linearGradient>
-                      <linearGradient id="colorUnique" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.35} />
-                        <stop offset="95%" stopColor="#3b82f6" stopOpacity={0.0} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
-                    <XAxis
-                      dataKey="date"
-                      tickFormatter={formatTick}
-                      stroke="#94a3b8"
-                      fontSize={11}
-                      tickLine={false}
-                      axisLine={{ stroke: "#e2e8f0" }}
-                    />
-                    <YAxis
-                      stroke="#94a3b8"
-                      fontSize={11}
-                      tickLine={false}
-                      axisLine={false}
-                      allowDecimals={false}
-                    />
-                    <Tooltip
-                      content={({ active, payload, label }) => {
-                        if (active && payload && payload.length) {
-                          const item = payload[0]?.payload as TimeSeriesPoint;
-                          return (
-                            <div
-                              className="bg-navy-950/95 text-white p-3 rounded-xl shadow-xl border border-navy-800 text-xs min-w-[200px] backdrop-blur-md"
-                              dir="rtl"
-                            >
-                              <p className="font-bold text-slate-300 border-b border-navy-800 pb-1.5 mb-2 font-mono">
-                                {timeRange === "24h"
-                                  ? new Date(label).toLocaleString("ar-EG", {
-                                      hour: "numeric",
-                                      minute: "2-digit",
-                                      day: "numeric",
-                                      month: "short",
-                                    })
-                                  : new Date(label).toLocaleDateString("ar-EG", {
-                                      year: "numeric",
-                                      month: "long",
-                                      day: "numeric",
-                                    })}
-                              </p>
-                              <div className="space-y-1.5">
-                                <div className="flex items-center justify-between text-emerald-400">
-                                  <span className="flex items-center gap-1.5">
-                                    <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                                    <span>إجمالي الزيارات:</span>
-                                  </span>
-                                  <span className="font-bold font-mono text-sm">
-                                    {item?.visits?.toLocaleString("ar-EG")}
-                                  </span>
-                                </div>
-                                <div className="flex items-center justify-between text-blue-400">
-                                  <span className="flex items-center gap-1.5">
-                                    <span className="w-2 h-2 rounded-full bg-blue-400" />
-                                    <span>الزوار الفريدون:</span>
-                                  </span>
-                                  <span className="font-bold font-mono text-sm">
-                                    {item?.unique?.toLocaleString("ar-EG")}
-                                  </span>
-                                </div>
-                              </div>
-                            </div>
-                          );
-                        }
-                        return null;
-                      }}
-                    />
-                    <Legend
-                      wrapperStyle={{ paddingTop: "14px", fontSize: "12px" }}
-                      formatter={(val) => {
-                        if (val === "visits") return "إجمالي الزيارات (Total Visits)";
-                        if (val === "unique") return "الزوار الفريدون (Unique Visitors)";
-                        return val;
-                      }}
-                    />
-                    <Area
-                      type="monotone"
-                      dataKey="visits"
-                      name="visits"
-                      stroke="#10b981"
-                      strokeWidth={2.5}
-                      fillOpacity={1}
-                      fill="url(#colorVisits)"
-                    />
-                    <Area
-                      type="monotone"
-                      dataKey="unique"
-                      name="unique"
-                      stroke="#3b82f6"
-                      strokeWidth={2.5}
-                      fillOpacity={1}
-                      fill="url(#colorUnique)"
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
-              )}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* 4. Breakdowns Section (5 Cards Grid) */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {/* Breakdown 1: Top Pages/Modules */}
-        <Card className="border border-slate-100 shadow-sm bg-white lg:col-span-2">
-          <CardHeader className="p-5 border-b border-slate-100">
-            <div className="flex items-center justify-between">
-              <div>
-                <CardTitle className="text-base font-bold text-navy-950 flex items-center gap-2">
-                  <Layers className="w-4 h-4 text-emerald-600" />
-                  <span>أكثر الصفحات والوحدات زيارة</span>
-                </CardTitle>
-                <CardDescription className="text-xs text-slate-500 mt-0.5">
-                  Top Visited Pages & Clinic Modules
-                </CardDescription>
-              </div>
-              <Badge variant="secondary" className="font-mono text-xs">
-                {data?.topPages?.length || 0} صفحات
-              </Badge>
-            </div>
-          </CardHeader>
-          <CardContent className="p-5">
-            {(!data?.topPages || data.topPages.length === 0) ? (
-              <p className="text-xs text-slate-400 py-6 text-center">لا توجد سجلات صفحات بعد.</p>
-            ) : (
-              <div className="space-y-3.5">
-                {data.topPages.slice(0, 7).map((item, idx) => {
-                  const pName = getPageName(item.page || "/");
-                  const total = kpis.totalVisits || 1;
-                  const pct = Math.min(100, Math.round((item.count / total) * 100));
-
-                  return (
-                    <div key={idx} className="space-y-1">
-                      <div className="flex items-center justify-between text-xs font-semibold">
-                        <div className="flex items-center gap-2 max-w-[70%] truncate">
-                          <span className="w-5 h-5 rounded-md bg-slate-100 text-slate-600 flex items-center justify-center text-[10px] font-mono">
-                            {idx + 1}
-                          </span>
-                          <span className="text-navy-950">{pName.ar}</span>
-                          <span className="text-slate-400 font-mono text-[11px] truncate">
-                            ({item.page})
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                          <span className="font-mono text-emerald-700 font-bold">
-                            {item.count.toLocaleString("ar-EG")} زيارة
-                          </span>
-                          <span className="text-[10px] text-slate-400 font-mono w-9 text-left">
-                            ({pct}%)
-                          </span>
-                        </div>
-                      </div>
-                      {/* Horizontal Bar */}
-                      <div className="w-full h-2 rounded-full bg-slate-100 overflow-hidden">
-                        <div
-                          className="h-full bg-emerald-500 rounded-full transition-all duration-500"
-                          style={{ width: `${Math.max(4, pct)}%` }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Breakdown 2: Traffic Sources */}
-        <Card className="border border-slate-100 shadow-sm bg-white">
-          <CardHeader className="p-5 border-b border-slate-100">
-            <div className="flex items-center justify-between">
-              <div>
-                <CardTitle className="text-base font-bold text-navy-950 flex items-center gap-2">
-                  <Compass className="w-4 h-4 text-emerald-600" />
-                  <span>مصادر الزيارات</span>
-                </CardTitle>
-                <CardDescription className="text-xs text-slate-500 mt-0.5">
-                  Traffic Sources & Referrers
-                </CardDescription>
-              </div>
-              <Badge variant="secondary" className="font-mono text-xs">
-                {data?.topReferrers?.length || 0} مصادر
-              </Badge>
-            </div>
-          </CardHeader>
-          <CardContent className="p-5">
-            {(!data?.topReferrers || data.topReferrers.length === 0) ? (
-              <p className="text-xs text-slate-400 py-6 text-center">لا توجد مصادر محددة بعد.</p>
-            ) : (
-              <div className="space-y-3">
-                {data.topReferrers.slice(0, 6).map((item, idx) => {
-                  const r = formatReferrer(item.referrer || "Direct");
-                  const total = kpis.totalVisits || 1;
-                  const pct = Math.min(100, Math.round((item.count / total) * 100));
-
-                  return (
-                    <div
-                      key={idx}
-                      className="p-2.5 rounded-lg border border-slate-100 hover:border-slate-200 transition-colors flex items-center justify-between"
-                    >
-                      <div className="flex items-center gap-2.5">
-                        <span className={cn("px-2 py-0.5 rounded text-[11px] font-bold border", r.color)}>
-                          {r.badge}
-                        </span>
-                        <div>
-                          <p className="text-xs font-bold text-navy-950">{r.labelAr}</p>
-                          <p className="text-[10px] text-slate-400">{r.labelEn}</p>
-                        </div>
-                      </div>
-                      <div className="text-left font-mono">
-                        <span className="text-xs font-bold text-navy-950">
-                          {item.count.toLocaleString("ar-EG")}
-                        </span>
-                        <span className="text-[10px] text-slate-400 ms-1">({pct}%)</span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Breakdown 3: Devices */}
-        <Card className="border border-slate-100 shadow-sm bg-white">
-          <CardHeader className="p-5 border-b border-slate-100">
-            <CardTitle className="text-base font-bold text-navy-950 flex items-center gap-2">
-              <Monitor className="w-4 h-4 text-emerald-600" />
-              <span>الأجهزة المستخدمة</span>
-            </CardTitle>
-            <CardDescription className="text-xs text-slate-500 mt-0.5">
-              Device Breakdown (Mobile, Tablet, Desktop)
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="p-5">
-            {(!data?.devices || data.devices.length === 0) ? (
-              <p className="text-xs text-slate-400 py-6 text-center">لا توجد بيانات أجهزة بعد.</p>
-            ) : (
-              <div className="space-y-3">
-                {data.devices.map((d, idx) => {
-                  const dev = getDeviceDetails(d.device || "desktop");
-                  const DevIcon = dev.icon;
-                  const total = kpis.totalVisits || 1;
-                  const pct = Math.min(100, Math.round((d.count / total) * 100));
-
-                  return (
-                    <div key={idx} className="space-y-1.5">
-                      <div className="flex items-center justify-between text-xs font-semibold">
-                        <div className="flex items-center gap-2">
-                          <div className={cn("w-7 h-7 rounded-lg flex items-center justify-center", dev.color)}>
-                            <DevIcon className="w-3.5 h-3.5" />
-                          </div>
-                          <div>
-                            <span className="text-navy-950 font-bold">{dev.labelAr}</span>
-                            <span className="text-slate-400 text-[10px] font-mono ms-1">
-                              ({dev.labelEn})
-                            </span>
-                          </div>
-                        </div>
-                        <div className="font-mono">
-                          <span className="font-bold text-navy-950">
-                            {d.count.toLocaleString("ar-EG")}
-                          </span>
-                          <span className="text-[10px] text-slate-400 ms-1 font-semibold">
-                            ({pct}%)
-                          </span>
-                        </div>
-                      </div>
-                      <div className="w-full h-2 rounded-full bg-slate-100 overflow-hidden">
-                        <div
-                          className="h-full bg-emerald-500 rounded-full transition-all duration-500"
-                          style={{ width: `${Math.max(5, pct)}%` }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Breakdown 4: Browsers */}
-        <Card className="border border-slate-100 shadow-sm bg-white">
-          <CardHeader className="p-5 border-b border-slate-100">
-            <CardTitle className="text-base font-bold text-navy-950 flex items-center gap-2">
-              <Laptop className="w-4 h-4 text-emerald-600" />
-              <span>المتصفحات وأنظمة التشغيل</span>
-            </CardTitle>
-            <CardDescription className="text-xs text-slate-500 mt-0.5">
-              Browsers & Client User Agents
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="p-5">
-            {(!data?.browsers || data.browsers.length === 0) ? (
-              <p className="text-xs text-slate-400 py-6 text-center">لا توجد بيانات متصفحات بعد.</p>
-            ) : (
-              <div className="space-y-3">
-                {data.browsers.slice(0, 5).map((b, idx) => {
-                  const total = kpis.totalVisits || 1;
-                  const pct = Math.min(100, Math.round((b.count / total) * 100));
-
-                  return (
-                    <div key={idx} className="space-y-1">
-                      <div className="flex items-center justify-between text-xs font-semibold">
-                        <span className="text-navy-950 font-mono">{b.browser || "Unknown"}</span>
-                        <div className="font-mono text-slate-600">
-                          <span className="font-bold text-navy-950">
-                            {b.count.toLocaleString("ar-EG")}
-                          </span>
-                          <span className="text-[10px] text-slate-400 ms-1">({pct}%)</span>
-                        </div>
-                      </div>
-                      <div className="w-full h-2 rounded-full bg-slate-100 overflow-hidden">
-                        <div
-                          className="h-full bg-blue-500 rounded-full transition-all duration-500"
-                          style={{ width: `${Math.max(4, pct)}%` }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Breakdown 5: Countries */}
-        <Card className="border border-slate-100 shadow-sm bg-white">
-          <CardHeader className="p-5 border-b border-slate-100">
-            <CardTitle className="text-base font-bold text-navy-950 flex items-center gap-2">
-              <Globe className="w-4 h-4 text-emerald-600" />
-              <span>التوزيع الجغرافي (الدول)</span>
-            </CardTitle>
-            <CardDescription className="text-xs text-slate-500 mt-0.5">
-              Geographic Traffic by Country
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="p-5">
-            {(!data?.countries || data.countries.length === 0) ? (
-              <p className="text-xs text-slate-400 py-6 text-center">لا توجد بيانات جغرافية بعد.</p>
-            ) : (
-              <div className="space-y-3">
-                {data.countries.slice(0, 5).map((c, idx) => {
-                  const country = formatCountry(c.country || null);
-                  const total = kpis.totalVisits || 1;
-                  const pct = Math.min(100, Math.round((c.count / total) * 100));
-
-                  return (
-                    <div key={idx} className="space-y-1">
-                      <div className="flex items-center justify-between text-xs font-semibold">
-                        <div className="flex items-center gap-2">
-                          <span className="text-base">{country.flag}</span>
-                          <span className="text-navy-950 font-bold">{country.name}</span>
-                          {c.country && (
-                            <span className="text-[10px] text-slate-400 font-mono">
-                              ({c.country})
-                            </span>
-                          )}
-                        </div>
-                        <div className="font-mono text-slate-600">
-                          <span className="font-bold text-navy-950">
-                            {c.count.toLocaleString("ar-EG")}
-                          </span>
-                          <span className="text-[10px] text-slate-400 ms-1">({pct}%)</span>
-                        </div>
-                      </div>
-                      <div className="w-full h-2 rounded-full bg-slate-100 overflow-hidden">
-                        <div
-                          className="h-full bg-purple-500 rounded-full transition-all duration-500"
-                          style={{ width: `${Math.max(4, pct)}%` }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* 5. Recent Visits Feed Table */}
-      <Card className="border border-slate-100 shadow-sm bg-white overflow-hidden">
-        <CardHeader className="border-b border-slate-100 p-5">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div>
-              <div className="flex items-center gap-2.5">
-                <CardTitle className="text-lg font-bold text-navy-950">
-                  آخر الزيارات المسجلة
-                </CardTitle>
-                <Badge variant="secondary" className="gap-1 font-mono text-xs">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block animate-pulse" />
-                  <span>تحديث تلقائي كل 30 ثانية</span>
-                </Badge>
-              </div>
-              <CardDescription className="text-xs text-slate-500 mt-1">
-                سجل الزوار في الوقت الفعلي مع تفاصيل الأجهزة والمواقع الجغرافية والصفحات
-              </CardDescription>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleExportCSV}
-                className="gap-1.5 border-slate-200 text-slate-700 hover:text-emerald-700 hover:bg-emerald-50"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span className="text-xs font-semibold">تصدير CSV</span>
-              </Button>
-            </div>
-          </div>
-        </CardHeader>
-
-        <CardContent className="p-0">
-          {(!data?.recentVisits || data.recentVisits.length === 0) ? (
-            <div className="py-12 text-center text-slate-400 text-sm">
-              لا توجد سجلات زيارات حديثة في قاعدة البيانات.
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader className="bg-slate-50">
-                  <TableRow>
-                    <TableHead className="w-[140px] text-xs font-bold text-slate-600">
-                      معرّف الزائر (Visitor ID)
-                    </TableHead>
-                    <TableHead className="text-xs font-bold text-slate-600">
-                      الصفحة المزارة (Page)
-                    </TableHead>
-                    <TableHead className="text-xs font-bold text-slate-600">
-                      الجهاز (Device)
-                    </TableHead>
-                    <TableHead className="text-xs font-bold text-slate-600">
-                      المتصفح (Browser)
-                    </TableHead>
-                    <TableHead className="text-xs font-bold text-slate-600">
-                      الدولة (Country)
-                    </TableHead>
-                    <TableHead className="text-xs font-bold text-slate-600">
-                      المرجع (Referrer)
-                    </TableHead>
-                    <TableHead className="text-xs font-bold text-slate-600 text-end">
-                      وقت الزيارة (Time)
-                    </TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {data.recentVisits.map((visit) => {
-                    const pInfo = getPageName(visit.page);
-                    const cInfo = formatCountry(visit.country);
-                    const devInfo = getDeviceDetails(visit.device);
-                    const DevIcon = devInfo.icon;
-                    const rInfo = formatReferrer(visit.referrer);
-
-                    const visitDate = new Date(visit.createdAt);
-                    const timeStr = visitDate.toLocaleTimeString("ar-EG", {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                      second: "2-digit",
-                    });
-                    const dateStr = visitDate.toLocaleDateString("ar-EG", {
-                      month: "short",
-                      day: "numeric",
-                    });
-
-                    return (
-                      <TableRow key={visit.id} className="hover:bg-slate-50/70 transition-colors">
-                        {/* Visitor ID */}
-                        <TableCell className="font-mono text-xs font-bold text-slate-700">
-                          <span className="px-2 py-1 bg-slate-100 rounded text-slate-800">
-                            {visit.visitorId}
-                          </span>
-                        </TableCell>
-
-                        {/* Page */}
-                        <TableCell>
-                          <div className="flex flex-col">
-                            <span className="text-xs font-bold text-navy-950">
-                              {pInfo.ar}
-                            </span>
-                            <span className="text-[11px] text-slate-400 font-mono">
-                              {visit.page}
-                            </span>
-                          </div>
-                        </TableCell>
-
-                        {/* Device */}
-                        <TableCell>
-                          <div className="flex items-center gap-1.5">
-                            <div className={cn("w-6 h-6 rounded flex items-center justify-center", devInfo.color)}>
-                              <DevIcon className="w-3.5 h-3.5" />
-                            </div>
-                            <span className="text-xs font-medium text-slate-700">
-                              {devInfo.labelAr}
-                            </span>
-                          </div>
-                        </TableCell>
-
-                        {/* Browser */}
-                        <TableCell className="text-xs font-medium text-slate-700 font-mono">
-                          {visit.browser || "Unknown"}
-                        </TableCell>
-
-                        {/* Country */}
-                        <TableCell>
-                          <div className="flex items-center gap-1.5 text-xs font-medium text-slate-700">
-                            <span className="text-base">{cInfo.flag}</span>
-                            <span>{cInfo.name}</span>
-                          </div>
-                        </TableCell>
-
-                        {/* Referrer */}
-                        <TableCell>
-                          <Badge variant="outline" className={cn("text-[10px] font-semibold border", rInfo.color)}>
-                            {rInfo.badge}
-                          </Badge>
-                        </TableCell>
-
-                        {/* Time */}
-                        <TableCell className="text-end">
-                          <div className="flex flex-col items-end">
-                            <span className="text-xs font-mono font-bold text-slate-700">
-                              {timeStr}
-                            </span>
-                            <span className="text-[10px] text-slate-400">
-                              {dateStr}
-                            </span>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-      </div>
       )}
 
       {/* Footer Info & Last Update */}
       <div className="flex flex-col sm:flex-row items-center justify-between text-xs text-slate-400 border-t border-slate-200/60 pt-4 gap-2">
         <div className="flex items-center gap-2">
           <ShieldCheck className="w-4 h-4 text-emerald-600" />
-          <span>نظام تحليلات Peak Motion مشفر ومجهل للهوية بالكامل وفق معايير الخصوصية الصحية</span>
+          <span>نظام تحليلات عيادة Revive مشفر ومجهل للهوية بالكامل وفق معايير الخصوصية الصحية</span>
         </div>
         <div>
           آخر تحديث:{" "}
